@@ -1,0 +1,326 @@
+# Bipartite Matching AWS Project - .gitignore
+
+# ===== Python =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+conda-meta/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ===== AWS & Cloud =====
+# AWS credentials (NEVER commit these!)
+.aws/
+credentials
+config
+*.pem
+*.key
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# ===== Datasets & Data Files =====
+# Large dataset files
+*.csv
+*.parquet
+*.tsv
+*.json.gz
+*.pickle
+*.pkl
+*.hdf5
+*.h5
+
+# Specific data directories
+data/
+datasets/
+Rideshare_experiment/data/
+Crowd_sourcing_experiment/data/
+Crowd_sourcing_experiment/work/
+
+# Compressed data files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ===== Experiment Results & Outputs =====
+# Results directories
+results/
+output/
+outputs/
+experiments/
+logs/
+Rideshare_experiment/results/
+Crowd_sourcing_experiment/results/
+
+# Temporary experiment files
+/tmp/
+temp/
+*.tmp
+*.temp
+
+# Model files and learned parameters
+*.model
+*.weights
+*.ckpt
+checkpoint/
+models/
+
+# Analysis outputs
+plots/
+figures/
+*.png
+*.jpg
+*.pdf
+*.svg
+
+# ===== Docker =====
+# Docker build artifacts
+Dockerfile.build
+docker-compose.override.yml
+.dockerignore
+
+# ===== IDE & Editors =====
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ===== OS Generated =====
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===== Project Specific =====
+# Local configuration files
+local_config.py
+config_local.py
+secrets.py
+
+# Work directories
+work/
+scratch/
+sandbox/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Cache directories
+.cache/
+cache/
+
+# Local notes and documentation
+notes.md
+todo.txt
+*.notes
+
+# Test data
+test_data/
+sample_data/
+
+# Jupyter notebook outputs (keep notebooks but ignore outputs)
+*.ipynb
+!*_template.ipynb
+
+# ===== Specific to this project =====
+# Experiment working directories
+experiment_*/
+simulation_*/
+
+# S3 sync directories
+s3_cache/
+s3_temp/
+
+# Local data downloads
+downloaded_data/
+nyc_taxi_data/
+trec_data/
+
+# Analysis notebooks with outputs
+analysis/*.ipynb
+notebooks/*.ipynb 
