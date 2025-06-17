@@ -35,10 +35,12 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/de
         --region $REGION
 else
     echo "🆕 Creating new Lambda function..."
+    # Get AWS Account ID
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region $REGION)
     aws lambda create-function \
         --function-name $FUNCTION_NAME \
         --runtime python3.9 \
-        --role arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/lambda-execution-role \
+        --role arn:aws:iam::${ACCOUNT_ID}:role/lambda-execution-role \
         --handler lambda_function.lambda_handler \
         --zip-file fileb://lambda-deployment.zip \
         --timeout 900 \

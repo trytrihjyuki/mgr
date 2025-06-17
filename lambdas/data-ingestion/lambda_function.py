@@ -26,25 +26,25 @@ class NYCDataIngester:
         self.s3_client = boto3.client('s3')
         self.bucket_name = os.environ.get('S3_BUCKET', 'magisterka')
         
-        # NYC Open Data API endpoints for different vehicle types
+        # NYC TLC direct data URLs (PARQUET format)
         self.data_sources = {
             'yellow': {
-                'base_url': 'https://data.cityofnewyork.us/resource/t29m-gskq.csv',
+                'base_url': 'https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02d}.parquet',
                 'description': 'Yellow Taxi Trip Data'
             },
             'green': {
-                'base_url': 'https://data.cityofnewyork.us/resource/gi8d-wdg5.csv', 
+                'base_url': 'https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_{year}-{month:02d}.parquet', 
                 'description': 'Green Taxi Trip Data'
             },
             'fhv': {
-                'base_url': 'https://data.cityofnewyork.us/resource/m3yx-mvk4.csv',
+                'base_url': 'https://d37ci6vzurychx.cloudfront.net/trip-data/fhv_tripdata_{year}-{month:02d}.parquet',
                 'description': 'For-Hire Vehicle Trip Data'
             }
         }
     
     def generate_s3_key(self, vehicle_type: str, year: int, month: int) -> str:
         """Generate S3 key for the dataset."""
-        return f"datasets/{vehicle_type}/year={year}/month={month:02d}/{vehicle_type}_tripdata_{year}-{month:02d}.csv"
+        return f"datasets/{vehicle_type}/year={year}/month={month:02d}/{vehicle_type}_tripdata_{year}-{month:02d}.parquet"
     
     def download_to_s3(self, vehicle_type: str, year: int, month: int, 
                       limit: Optional[int] = None) -> Dict[str, Any]:
@@ -55,7 +55,7 @@ class NYCDataIngester:
             vehicle_type: Type of vehicle ('yellow', 'green', 'fhv')
             year: Year of data
             month: Month of data
-            limit: Optional limit on number of records
+            limit: Optional limit (NOTE: ignored for direct PARQUET downloads)
             
         Returns:
             Dictionary with download results
@@ -63,26 +63,14 @@ class NYCDataIngester:
         if vehicle_type not in self.data_sources:
             raise ValueError(f"Unsupported vehicle type: {vehicle_type}")
         
-        # Build API URL with filters
-        base_url = self.data_sources[vehicle_type]['base_url']
+        # Build direct file URL
+        file_url = self.data_sources[vehicle_type]['base_url'].format(year=year, month=month)
         
-        # Add date filters for the specific month
-        start_date = f"{year}-{month:02d}-01T00:00:00.000"
-        end_date = f"{year}-{month:02d}-{self._last_day_of_month(year, month)}T23:59:59.999"
-        
-        params = {
-            '$where': f"pickup_datetime >= '{start_date}' AND pickup_datetime < '{end_date}'",
-            '$order': 'pickup_datetime ASC'
-        }
-        
-        if limit:
-            params['$limit'] = limit
-        
-        logger.info(f"Downloading {vehicle_type} data for {year}-{month:02d}")
+        logger.info(f"Downloading {vehicle_type} data for {year}-{month:02d} from {file_url}")
         
         try:
             # Stream download directly to S3
-            response = requests.get(base_url, params=params, stream=True)
+            response = requests.get(file_url, stream=True)
             response.raise_for_status()
             
             # Generate S3 key
@@ -93,7 +81,7 @@ class NYCDataIngester:
                 response.raw,
                 self.bucket_name,
                 s3_key,
-                ExtraArgs={'ContentType': 'text/csv'}
+                ExtraArgs={'ContentType': 'application/parquet'}
             )
             
             # Get object size
@@ -132,15 +120,7 @@ class NYCDataIngester:
                 'month': month
             }
     
-    def _last_day_of_month(self, year: int, month: int) -> int:
-        """Get the last day of the month."""
-        if month == 12:
-            next_month = datetime(year + 1, 1, 1)
-        else:
-            next_month = datetime(year, month + 1, 1)
-        
-        last_day = next_month - timedelta(days=1)
-        return last_day.day
+
     
     def bulk_download(self, vehicle_types: List[str], year: int, 
                      start_month: int = 1, end_month: int = 12,

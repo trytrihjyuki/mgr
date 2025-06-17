@@ -1,75 +1,144 @@
 #!/usr/bin/env python3
 """
-Simplified Experiment Runner Lambda Function
-Runs bipartite matching experiments with simulated data to avoid heavy dependencies.
+Experiment Runner Lambda Function
+Runs bipartite matching experiments on rideshare data stored in S3.
 """
 
 import json
 import boto3
+import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
+import os
+import io
+from urllib.parse import urlparse
+import traceback
 import random
 import math
-import os
 
 # Setup logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-class SimpleBipartiteMatchingExperiment:
+class BipartiteMatchingExperiment:
     """
-    Runs simplified bipartite matching experiments.
+    Runs bipartite matching experiments on rideshare data.
     """
     
     def __init__(self):
         self.s3_client = boto3.client('s3')
         self.bucket_name = os.environ.get('S3_BUCKET', 'magisterka')
     
-    def check_data_exists(self, vehicle_type: str, year: int, month: int) -> Dict[str, Any]:
-        """Check if data exists in S3 and get metadata."""
+    def load_data_from_s3(self, vehicle_type: str, year: int, month: int) -> pd.DataFrame:
+        """Load rideshare data from S3."""
         s3_key = f"datasets/{vehicle_type}/year={year}/month={month:02d}/{vehicle_type}_tripdata_{year}-{month:02d}.parquet"
         
         try:
-            response = self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_key)
-            return {
-                'exists': True,
-                'size': response['ContentLength'],
-                'last_modified': response['LastModified'].isoformat(),
-                's3_key': s3_key
-            }
+            logger.info(f"Loading data from s3://{self.bucket_name}/{s3_key}")
+            
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+            df = pd.read_parquet(io.BytesIO(response['Body'].read()))
+            
+            logger.info(f"✅ Loaded {len(df)} records from {s3_key}")
+            return df
+            
         except Exception as e:
-            logger.warning(f"Data not found: {s3_key} - {e}")
-            return {'exists': False, 's3_key': s3_key}
+            logger.error(f"❌ Failed to load data from {s3_key}: {e}")
+            raise
     
-    def simulate_rideshare_data(self, data_size: int, demand_factor: float, supply_factor: float) -> Dict[str, Any]:
-        """Simulate rideshare data characteristics."""
-        # Simulate based on actual file size (estimate records from file size)
-        estimated_records = max(100, data_size // 1000)  # Rough estimate: 1KB per record
-        simulated_rides = int(estimated_records * demand_factor)
-        simulated_drivers = int(simulated_rides * supply_factor)
+    def preprocess_data(self, df: pd.DataFrame, simulation_range: int = 5) -> Dict[str, Any]:
+        """
+        Preprocess rideshare data for bipartite matching experiment.
+        
+        Args:
+            df: Raw rideshare data
+            simulation_range: Number of simulation scenarios
+            
+        Returns:
+            Preprocessed data for experiments
+        """
+        logger.info("🔄 Preprocessing rideshare data...")
+        
+        # Basic data cleaning
+        df = df.dropna(subset=['pickup_datetime', 'dropoff_datetime'])
+        
+        # Convert datetime columns
+        if 'pickup_datetime' in df.columns:
+            df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'])
+        if 'dropoff_datetime' in df.columns:
+            df['dropoff_datetime'] = pd.to_datetime(df['dropoff_datetime'])
+        
+        # Extract time-based features
+        df['hour'] = df['pickup_datetime'].dt.hour
+        df['day_of_week'] = df['pickup_datetime'].dt.dayofweek
+        
+        # Create simplified location zones (for demo purposes)
+        # In real implementation, this would use actual taxi zones
+        if 'pickup_longitude' in df.columns and 'pickup_latitude' in df.columns:
+            df['pickup_zone'] = (
+                (df['pickup_longitude'] // 0.01).astype(int).astype(str) + "_" +
+                (df['pickup_latitude'] // 0.01).astype(int).astype(str)
+            )
+        
+        if 'dropoff_longitude' in df.columns and 'dropoff_latitude' in df.columns:
+            df['dropoff_zone'] = (
+                (df['dropoff_longitude'] // 0.01).astype(int).astype(str) + "_" +
+                (df['dropoff_latitude'] // 0.01).astype(int).astype(str)
+            )
+        
+        # Sample data for simulation
+        sample_size = min(len(df), 10000)  # Limit for Lambda execution
+        df_sample = df.sample(n=sample_size, random_state=42)
+        
+        # Create demand/supply scenarios
+        scenarios = []
+        for i in range(simulation_range):
+            # Simulate different demand/supply ratios
+            demand_factor = random.uniform(0.5, 1.5)
+            supply_factor = random.uniform(0.5, 1.5)
+            
+            scenarios.append({
+                'scenario_id': i,
+                'demand_factor': demand_factor,
+                'supply_factor': supply_factor,
+                'data_sample': df_sample.sample(frac=demand_factor, replace=True).reset_index(drop=True)
+            })
         
         return {
-            'estimated_total_records': estimated_records,
-            'simulated_rides': simulated_rides,
-            'simulated_drivers': simulated_drivers,
-            'demand_factor': demand_factor,
-            'supply_factor': supply_factor
+            'original_size': len(df),
+            'processed_size': len(df_sample),
+            'scenarios': scenarios,
+            'preprocessing_time': datetime.now().isoformat()
         }
     
     def run_bipartite_matching(self, scenario_data: Dict[str, Any], 
                               acceptance_function: str = 'PL') -> Dict[str, Any]:
-        """Run bipartite matching algorithm on scenario data."""
-        num_rides = scenario_data['simulated_rides']
-        num_drivers = scenario_data['simulated_drivers']
+        """
+        Run bipartite matching algorithm on scenario data.
+        
+        Args:
+            scenario_data: Preprocessed scenario data
+            acceptance_function: Type of acceptance function ('PL' or 'Sigmoid')
+            
+        Returns:
+            Matching results
+        """
+        df = scenario_data['data_sample']
+        
+        # Simplified bipartite matching simulation
+        # In real implementation, this would use the actual algorithm from the paper
+        
+        # Create riders and drivers
+        num_rides = len(df)
+        num_drivers = int(num_rides * scenario_data['supply_factor'])
         
         # Simulate acceptance probabilities
         if acceptance_function == 'PL':
             # Piecewise Linear acceptance function
-            acceptance_probs = [
-                max(0.1, random.uniform(0.6, 0.9) - random.uniform(0.0, 0.3))
-                for _ in range(num_rides)
-            ]
+            base_acceptance = [random.uniform(0.6, 0.9) for _ in range(num_rides)]
+            distance_penalty = [random.uniform(0.0, 0.3) for _ in range(num_rides)]
+            acceptance_probs = [max(0.1, base - penalty) for base, penalty in zip(base_acceptance, distance_penalty)]
         else:
             # Sigmoid acceptance function
             logits = [random.gauss(0, 1) for _ in range(num_rides)]
@@ -79,15 +148,16 @@ class SimpleBipartiteMatchingExperiment:
         matched = [1 if random.random() < prob else 0 for prob in acceptance_probs]
         
         # Calculate metrics
+        total_requests = num_rides
         successful_matches = sum(matched)
-        match_rate = successful_matches / num_rides if num_rides > 0 else 0
+        match_rate = successful_matches / total_requests if total_requests > 0 else 0
         avg_acceptance_prob = sum(acceptance_probs) / len(acceptance_probs) if acceptance_probs else 0
         
         return {
-            'scenario_id': scenario_data.get('scenario_id', 0),
-            'total_requests': num_rides,
+            'scenario_id': scenario_data['scenario_id'],
+            'total_requests': total_requests,
             'available_drivers': num_drivers,
-            'successful_matches': successful_matches,
+            'successful_matches': int(successful_matches),
             'match_rate': float(match_rate),
             'avg_acceptance_probability': float(avg_acceptance_prob),
             'acceptance_function': acceptance_function,
@@ -97,32 +167,34 @@ class SimpleBipartiteMatchingExperiment:
     def run_experiment(self, vehicle_type: str, year: int, month: int,
                       place: str = "Manhattan", simulation_range: int = 5,
                       acceptance_function: str = 'PL') -> Dict[str, Any]:
-        """Run complete rideshare experiment."""
+        """
+        Run complete rideshare experiment.
+        
+        Args:
+            vehicle_type: Type of vehicle data
+            year: Year of data
+            month: Month of data
+            place: Location (for metadata)
+            simulation_range: Number of simulation scenarios
+            acceptance_function: Type of acceptance function
+            
+        Returns:
+            Complete experiment results
+        """
         start_time = datetime.now()
         experiment_id = f"rideshare_{vehicle_type}_{year}_{month:02d}_{start_time.strftime('%Y%m%d_%H%M%S')}"
         
         logger.info(f"🧪 Starting experiment: {experiment_id}")
         
         try:
-            # Check if data exists
-            data_info = self.check_data_exists(vehicle_type, year, month)
+            # Load and preprocess data
+            df = self.load_data_from_s3(vehicle_type, year, month)
+            preprocessed = self.preprocess_data(df, simulation_range)
             
-            if not data_info['exists']:
-                raise FileNotFoundError(f"Data not found for {vehicle_type} {year}-{month:02d}")
-            
-            # Run experiments on simulated scenarios
+            # Run experiments on all scenarios
             scenario_results = []
-            for i in range(simulation_range):
-                # Simulate different demand/supply ratios
-                demand_factor = random.uniform(0.5, 1.5)
-                supply_factor = random.uniform(0.5, 1.5)
-                
-                scenario_data = self.simulate_rideshare_data(
-                    data_info['size'], demand_factor, supply_factor
-                )
-                scenario_data['scenario_id'] = i
-                
-                result = self.run_bipartite_matching(scenario_data, acceptance_function)
+            for scenario in preprocessed['scenarios']:
+                result = self.run_bipartite_matching(scenario, acceptance_function)
                 scenario_results.append(result)
             
             # Aggregate results
@@ -147,10 +219,8 @@ class SimpleBipartiteMatchingExperiment:
                     'acceptance_function': acceptance_function
                 },
                 'data_info': {
-                    'data_exists': data_info['exists'],
-                    'data_size_bytes': data_info.get('size', 0),
-                    'data_last_modified': data_info.get('last_modified'),
-                    's3_key': data_info['s3_key']
+                    'original_data_size': preprocessed['original_size'],
+                    'processed_data_size': preprocessed['processed_size']
                 },
                 'results': {
                     'total_scenarios': len(scenario_results),
@@ -162,8 +232,7 @@ class SimpleBipartiteMatchingExperiment:
                 },
                 'execution_time_seconds': execution_time,
                 'timestamp': start_time.isoformat(),
-                'status': 'completed',
-                'note': 'Simplified simulation based on data metadata'
+                'status': 'completed'
             }
             
             # Upload results to S3
@@ -174,6 +243,7 @@ class SimpleBipartiteMatchingExperiment:
             
         except Exception as e:
             logger.error(f"❌ Experiment failed: {e}")
+            logger.error(traceback.format_exc())
             
             error_results = {
                 'experiment_id': experiment_id,
@@ -213,7 +283,19 @@ class SimpleBipartiteMatchingExperiment:
             logger.error(f"❌ Failed to upload results: {e}")
 
 def lambda_handler(event, context):
-    """AWS Lambda handler function."""
+    """
+    AWS Lambda handler function.
+    
+    Expected event format:
+    {
+        "vehicle_type": "green|yellow|fhv",
+        "year": 2019,
+        "month": 3,
+        "place": "Manhattan",
+        "simulation_range": 5,
+        "acceptance_function": "PL|Sigmoid"
+    }
+    """
     
     try:
         # Extract parameters
@@ -225,7 +307,7 @@ def lambda_handler(event, context):
         acceptance_function = event.get('acceptance_function', 'PL')
         
         # Run experiment
-        experiment = SimpleBipartiteMatchingExperiment()
+        experiment = BipartiteMatchingExperiment()
         results = experiment.run_experiment(
             vehicle_type=vehicle_type,
             year=year,
@@ -242,6 +324,7 @@ def lambda_handler(event, context):
         
     except Exception as e:
         logger.error(f"Lambda execution failed: {e}")
+        logger.error(traceback.format_exc())
         
         return {
             'statusCode': 500,
@@ -257,6 +340,7 @@ if __name__ == "__main__":
         "vehicle_type": "green",
         "year": 2019,
         "month": 3,
+        "place": "Manhattan",
         "simulation_range": 3,
         "acceptance_function": "PL"
     }
