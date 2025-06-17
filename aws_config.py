@@ -6,6 +6,10 @@ Manages S3 bucket structure and AWS service configurations.
 
 import os
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class AWSConfig:
     """Centralized AWS configuration management."""
@@ -17,8 +21,7 @@ class AWSConfig:
     S3_PREFIXES = {
         'datasets': {
             'root': 'datasets',
-            'rideshare': 'datasets/{vehicle_type}/year={year}/month={month:02d}/',
-            'crowdsourcing': 'datasets/crowdsourcing/{year}/'
+            'rideshare': 'datasets/{vehicle_type}/year={year}/month={month:02d}/'
         },
         'experiments': {
             'results': 'experiments/results',

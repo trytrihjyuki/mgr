@@ -121,43 +121,7 @@ class AWSDeploymentManager:
         
         return upload_results
     
-    def upload_crowdsourcing_data(self, data_dir: str = "Crowd_sourcing_experiment/work") -> bool:
-        """
-        Upload crowdsourcing datasets to S3.
-        
-        Args:
-            data_dir: Directory containing crowdsourcing data
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        data_path = Path(data_dir)
-        if not data_path.exists():
-            self.logger.error(f"Crowdsourcing data directory not found: {data_dir}")
-            return False
-        
-        # Look for the main crowdsourcing data file
-        data_file = data_path / "trec-rf10-data.csv"
-        if not data_file.exists():
-            self.logger.error(f"Crowdsourcing data file not found: {data_file}")
-            return False
-        
-        try:
-            s3_key = f"datasets/crowdsourcing/2010/trec-rf10-data.csv"
-            
-            self.logger.info(f"📤 Uploading crowdsourcing data...")
-            self.s3_manager.s3_client.upload_file(
-                str(data_file),
-                self.s3_manager.bucket_name,
-                s3_key
-            )
-            
-            self.logger.info(f"✅ Crowdsourcing data uploaded: s3://{self.s3_manager.bucket_name}/{s3_key}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ Failed to upload crowdsourcing data: {e}")
-            return False
+
     
     def list_s3_data(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -171,13 +135,11 @@ class AWSDeploymentManager:
         
         organized_data = {
             'rideshare_datasets': [d for d in datasets if d['vehicle_type'] in ['green', 'yellow', 'fhv', 'fhvhv']],
-            'crowdsourcing_datasets': [d for d in datasets if 'crowdsourcing' in d['key']],
             'experiment_results': results
         }
         
         self.logger.info(f"📊 S3 Data Summary:")
         self.logger.info(f"   Rideshare datasets: {len(organized_data['rideshare_datasets'])}")
-        self.logger.info(f"   Crowdsourcing datasets: {len(organized_data['crowdsourcing_datasets'])}")
         self.logger.info(f"   Experiment results: {len(organized_data['experiment_results'])}")
         
         return organized_data
@@ -209,7 +171,7 @@ class AWSDeploymentManager:
         if experiment_type == 'rideshare':
             results = runner.run_rideshare_experiment(**kwargs)
         else:
-            results = runner.run_crowdsourcing_experiment(**kwargs)
+            raise ValueError(f"Unsupported experiment type: {experiment_type}")
         
         # Save results
         runner.save_results(results)
@@ -248,7 +210,6 @@ class AWSDeploymentManager:
             'experiments': results,
             'summary': {
                 'rideshare_experiments': len([r for r in results if 'rideshare' in r['key']]),
-                'crowdsourcing_experiments': len([r for r in results if 'crowdsourcing' in r['key']]),
                 'total_data_size': sum(r['size'] for r in results)
             }
         }
@@ -273,23 +234,20 @@ def main():
                            choices=['green', 'yellow', 'fhv', 'fhvhv'],
                            help='Vehicle types to upload')
     
-    # Upload crowdsourcing data
-    crowd_cmd = subparsers.add_parser('upload-crowdsourcing', help='Upload crowdsourcing data')
-    crowd_cmd.add_argument('--data-dir', default='Crowd_sourcing_experiment/work',
-                          help='Crowdsourcing data directory')
+
     
     # List S3 data
     subparsers.add_parser('list-data', help='List data in S3')
     
     # Run experiment
     run_cmd = subparsers.add_parser('run-experiment', help='Run experiment on AWS')
-    run_cmd.add_argument('experiment_type', choices=['rideshare', 'crowdsourcing'])
+    run_cmd.add_argument('experiment_type', choices=['rideshare'])
     run_cmd.add_argument('--vehicle-type', default='green')
     run_cmd.add_argument('--year', type=int, default=2019)
     run_cmd.add_argument('--month', type=int, default=3)
     run_cmd.add_argument('--place', default='Manhattan')
-    run_cmd.add_argument('--phi', type=float, default=0.8)
-    run_cmd.add_argument('--psi', type=float, default=0.6)
+    run_cmd.add_argument('--simulation-range', type=int, default=5)
+    run_cmd.add_argument('--acceptance-function', choices=['PL', 'Sigmoid'], default='PL')
     
     # Cleanup
     cleanup_cmd = subparsers.add_parser('cleanup', help='Clean up old data')
@@ -310,9 +268,6 @@ def main():
         if args.command == 'upload-datasets':
             manager.upload_datasets(args.data_dir, args.vehicle_types)
         
-        elif args.command == 'upload-crowdsourcing':
-            manager.upload_crowdsourcing_data(args.data_dir)
-        
         elif args.command == 'list-data':
             data = manager.list_s3_data()
             print("\n📊 S3 Data Summary:")
@@ -324,19 +279,14 @@ def main():
                     print(f"    ... and {len(items) - 3} more")
         
         elif args.command == 'run-experiment':
-            kwargs = {}
-            if args.experiment_type == 'rideshare':
-                kwargs = {
-                    'vehicle_type': args.vehicle_type,
-                    'year': args.year,
-                    'month': args.month,
-                    'place': args.place
-                }
-            else:
-                kwargs = {
-                    'phi': args.phi,
-                    'psi': args.psi
-                }
+            kwargs = {
+                'vehicle_type': args.vehicle_type,
+                'year': args.year,
+                'month': args.month,
+                'place': args.place,
+                'simulation_range': args.simulation_range,
+                'acceptance_function': args.acceptance_function
+            }
             
             experiment_id = manager.run_ec2_experiment(args.experiment_type, **kwargs)
             print(f"✅ Experiment completed: {experiment_id}")

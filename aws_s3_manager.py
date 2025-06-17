@@ -93,7 +93,7 @@ class S3DataManager:
             'datasets/',
             'datasets/green/',
             'datasets/yellow/',
-            'datasets/crowdsourcing/',
+            'datasets/fhv/',
             'experiments/',
             'experiments/results/',
             'experiments/analysis/',
