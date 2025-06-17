@@ -1,8 +1,8 @@
-# Practical Usage Examples
+# Enhanced Rideshare Experiment Usage Examples
 
 ## 🎯 **Easy Method: Use Helper Script (Recommended)**
 
-The `run_experiment.sh` script eliminates JSON parsing issues and provides a clean interface:
+The `run_experiment.sh` script provides a clean interface for sophisticated multi-method experiments:
 
 ```bash
 # Make executable (one time)
@@ -10,181 +10,207 @@ chmod +x run_experiment.sh
 
 # Show all available commands
 ./run_experiment.sh
+```
 
-# Examples
-./run_experiment.sh download-single green 2019 3
-./run_experiment.sh download-bulk 2019 1 3 green,yellow
-./run_experiment.sh run-experiment green 2019 3 5 PL
-./run_experiment.sh list-data
+## 🧪 **Sophisticated Experiment Capabilities**
+
+### **1. Multi-Method Comparative Experiments**
+
+Run all 4 bipartite matching methods simultaneously for direct comparison:
+
+```bash
+# Compare all methods on green taxi data
+./run_experiment.sh run-comparative green 2019 3 PL 5
+
+# Results show:
+# • Proposed Method (Min-Cost Flow)
+# • MAPS (Market-Aware Pricing Strategy)  
+# • LinUCB (Multi-Armed Bandit)
+# • Linear Program (New Method)
+```
+
+**Example Output:**
+```
+🔬 Comparative Experiment Analysis: rideshare_green_2019_03_proposed_maps_linucb_linear_program_pl_...
+================================================================================
+Methods Tested: proposed, maps, linucb, linear_program
+🏆 Best Performing Methods:
+  • Objective Value: LINEAR_PROGRAM (165416.502)
+  • Match Rate: LINEAR_PROGRAM (54.96%)
+  • Revenue: LINEAR_PROGRAM (165416.502)
+📈 Performance Ranking:
+  1. LINEAR_PROGRAM: 165416.50
+  2. PROPOSED: 73565.84
+  3. LINUCB: 38240.65
+  4. MAPS: 21829.66
+```
+
+### **2. Meta-Parameter Testing**
+
+Test different algorithm parameters to optimize performance:
+
+```bash
+# Test different window times
+./run_experiment.sh test-window-time green 2019 3 linear_program 600
+./run_experiment.sh test-window-time green 2019 3 linear_program 300
+./run_experiment.sh test-window-time green 2019 3 linear_program 900
+
+# Test retry mechanisms
+./run_experiment.sh test-retry-count green 2019 3 proposed 5
+./run_experiment.sh test-retry-count green 2019 3 proposed 10
+
+# Compare acceptance functions
+./run_experiment.sh test-acceptance-functions green 2019 3 maps
+```
+
+**Acceptance Function Comparison Results:**
+```
+📄 PL Results: Match Rate: 45.24%, Revenue: 65,365.87
+📄 Sigmoid Results: Match Rate: 72.01%, Revenue: 105,936.55
+```
+
+### **3. Comprehensive Benchmarking**
+
+Run extensive benchmarks across all methods and acceptance functions:
+
+```bash
+# Full benchmark suite
+./run_experiment.sh run-benchmark green 2019 3 5
+
+# Tests all combinations:
+# • 4 Methods × 2 Acceptance Functions = 8 experiments
+# • Automatic comparative analysis
+# • Performance visualizations
+```
+
+### **4. Single Method Testing**
+
+Focus on specific algorithms for detailed analysis:
+
+```bash
+# Test individual methods
+./run_experiment.sh run-single green 2019 3 proposed PL 5
+./run_experiment.sh run-single green 2019 3 linear_program Sigmoid 3
+./run_experiment.sh run-single yellow 2019 6 maps PL 7
+```
+
+## 📊 **Advanced Analysis & Visualization**
+
+### **Comparative Analysis**
+
+```bash
+# Analyze comparative experiments
+python local-manager/results_manager.py analyze rideshare_green_2019_03_proposed_maps_linucb_linear_program_pl_...
+
+# Generates:
+# • Method performance comparison tables
+# • Best performer identification  
+# • Performance ranking
+# • Detailed statistical analysis
+# • 3 visualization plots automatically
+```
+
+### **Experiment Management**
+
+```bash
+# List recent experiments  
 ./run_experiment.sh list-experiments 7
-```
-
-## 🔍 Understanding Lambda Responses vs S3 Data
-
-When you invoke a Lambda function, there are **two different things**:
-
-1. **Lambda Response** - Just the function's HTTP response (properly formatted by helper script)
-2. **Actual Data** - Stored directly in S3
-
-### Helper Script Output Example
-```
-🧪 Running experiment: green taxi 2019-03 with 5 scenarios...
-📄 Response:
-{
-    "statusCode": 200,
-    "body": {
-        "experiment_id": "rideshare_green_2019_03_20250617_115920",
-        "total_requests": 32930,
-        "total_successful_matches": 19721,
-        "average_match_rate": 0.599
-    }
-}
-```
-
-### Actual Data Location
-```
-s3://magisterka/datasets/green/year=2019/month=03/green_tripdata_2019-03.parquet
-s3://magisterka/experiments/results/rideshare/rideshare_green_2019_03_20250617_115920_results.json
-```
-
-## 📊 Complete Workflow Examples
-
-### Example 1: Download and Experiment with Green Taxi Data (Using Helper Script)
-
-```bash
-# 1. Download green taxi data for March 2019
-./run_experiment.sh download-single green 2019 3
-
-# 2. Verify data was uploaded to S3
-./run_experiment.sh list-data
-
-# 3. Run bipartite matching experiment
-./run_experiment.sh run-experiment green 2019 3 5 PL
-
-# 4. View all recent experiments
-./run_experiment.sh list-experiments 1
-```
-
-### Example 1b: Manual AWS CLI Commands (If Helper Script Issues)
-
-```bash
-# 1. Download data (single-line JSON, no parsing issues)
-/usr/local/bin/aws lambda invoke \
-  --function-name nyc-data-ingestion \
-  --payload '{"action":"download_single","vehicle_type":"green","year":2019,"month":3}' \
-  --region eu-north-1 \
-  --cli-binary-format raw-in-base64-out \
-  response.json && cat response.json | python3 -m json.tool
-
-# 2. Run experiment (single-line JSON)
-/usr/local/bin/aws lambda invoke \
-  --function-name rideshare-experiment-runner \
-  --payload '{"vehicle_type":"green","year":2019,"month":3,"simulation_range":5,"acceptance_function":"PL"}' \
-  --region eu-north-1 \
-  --cli-binary-format raw-in-base64-out \
-  response.json && cat response.json | python3 -m json.tool
-```
-
-### Example 2: Using Local Results Manager
-
-```bash
-# Instead of parsing JSON responses, use the local manager
-source venv/bin/activate
-
-# List all recent experiments
-python local-manager/results_manager.py list --days 1
-
-# Generate a comprehensive report
-python local-manager/results_manager.py report --days 1 --output today_report.txt
 
 # Show specific experiment details
-python local-manager/results_manager.py show rideshare_green_2019_03_20241217_143022
+./run_experiment.sh show-experiment <experiment_id>
+
+# Generate comprehensive reports
+python local-manager/results_manager.py report --days 7 --output analysis_report.txt
 ```
 
-### Example 3: Bulk Data Processing
+## 🔄 **Complete Workflow Examples**
+
+### **Example 1: Algorithm Development Workflow**
 
 ```bash
-# Download multiple datasets (6 files: green & yellow for Jan-Mar 2019)
-./run_experiment.sh download-bulk 2019 1 3 green,yellow
+# 1. Download datasets
+./run_experiment.sh download-bulk 2019 1 3 green,yellow,fhv
 
-# Check what was downloaded
-./run_experiment.sh list-data
+# 2. Run comparative baseline
+./run_experiment.sh run-comparative green 2019 3 PL 5
 
-# Run experiments on all downloaded data
-for vehicle in green yellow; do
-  for month in 1 2 3; do
-    ./run_experiment.sh run-experiment $vehicle 2019 $month 5 PL
-    echo "Started experiment: $vehicle taxi, month $month"
-  done
+# 3. Test meta-parameters for best performer  
+./run_experiment.sh test-window-time green 2019 3 linear_program 300
+./run_experiment.sh test-window-time green 2019 3 linear_program 600
+./run_experiment.sh test-window-time green 2019 3 linear_program 900
+
+# 4. Compare acceptance functions
+./run_experiment.sh test-acceptance-functions green 2019 3 linear_program
+
+# 5. Full benchmark with optimized parameters
+./run_experiment.sh run-benchmark green 2019 3 7
+
+# 6. Analyze and visualize results
+python local-manager/results_manager.py analyze <comparative_experiment_id>
+```
+
+### **Example 2: Multi-Dataset Analysis**
+
+```bash
+# Test across different vehicle types and time periods
+for vehicle in green yellow fhv; do
+    for month in 1 2 3; do
+        ./run_experiment.sh run-comparative $vehicle 2019 $month PL 3
+        echo "Completed $vehicle taxi analysis for 2019-$month"
+    done
 done
 
-# Analyze all results
-python local-manager/results_manager.py report --days 1
+# Generate comprehensive comparison report
+python local-manager/results_manager.py report --days 30
 ```
 
-### Example 3b: Manual Bulk Processing (If Needed)
+### **Example 3: Parameter Sensitivity Analysis**
 
 ```bash
-# Bulk download with manual command
-/usr/local/bin/aws lambda invoke \
-  --function-name nyc-data-ingestion \
-  --payload '{"action":"download_bulk","vehicle_types":["green","yellow"],"year":2019,"start_month":1,"end_month":3}' \
-  --region eu-north-1 \
-  --cli-binary-format raw-in-base64-out \
-  response.json && cat response.json | python3 -m json.tool
+# Test linear_program method with different parameters
+for window in 180 300 600 900 1200; do
+    ./run_experiment.sh test-window-time green 2019 3 linear_program $window
+done
+
+for retries in 3 5 10 15; do  
+    ./run_experiment.sh test-retry-count green 2019 3 linear_program $retries
+done
+
+# Compare all results
+python local-manager/results_manager.py compare <experiment_id_1> <experiment_id_2> <experiment_id_3>
 ```
 
-## 🎯 Key Points
+## 📈 **S3 Data Organization**
 
-### ✅ DO:
-- Use the **local results manager** to analyze data
-- Check **S3 directly** for actual data files
-- Parse the **Lambda response body** to get S3 keys
-- Use **bulk operations** for efficiency
+Results are automatically organized with method-specific paths:
 
-### ❌ DON'T:
-- Expect actual data in `output.json` files
-- Try to download data through Lambda responses
-- Ignore the local results manager tools
-
-## 🔧 Troubleshooting
-
-### Check if Data Ingestion Worked
-```bash
-# Check S3 for data
-aws s3 ls s3://magisterka/datasets/ --recursive --region eu-north-1
-
-# Or use the existing tools
-python aws_s3_manager.py list-datasets
+```
+s3://magisterka/
+├── datasets/
+│   ├── green/year=2019/month=03/
+│   ├── yellow/year=2019/month=03/
+│   └── fhv/year=2020/month=01/
+└── experiments/results/rideshare/
+    ├── pl/          # PL acceptance function results
+    └── sigmoid/     # Sigmoid acceptance function results
 ```
 
-### Check if Experiments Completed
-```bash
-# Check S3 for results
-aws s3 ls s3://magisterka/experiments/results/rideshare/ --region eu-north-1
+## 🎯 **Key Features Achieved**
 
-# Or use the local manager
-python local-manager/results_manager.py list --days 1
-```
+✅ **4 Sophisticated Methods**: Proposed, MAPS, LinUCB, Linear Program  
+✅ **Meta-Parameter Testing**: Window time, retry count, acceptance functions  
+✅ **Comparative Analysis**: Side-by-side method comparison  
+✅ **Automatic Visualization**: 3 plot types per comparative experiment  
+✅ **Statistical Analysis**: Performance ranking, best performers  
+✅ **Path Organization**: Method-specific S3 organization  
+✅ **Scalable Architecture**: Cloud-native, serverless execution
 
-### Parse Lambda Response for S3 Keys
-```bash
-# Extract S3 key from Lambda response
-cat experiment_response.json | jq -r '.body' | jq -r '.s3_key'
+## 🚀 **Next Steps**
 
-# Download the actual result file
-S3_KEY=$(cat experiment_response.json | jq -r '.body' | jq -r '.s3_key')
-aws s3 cp s3://magisterka/$S3_KEY ./result.json --region eu-north-1
-```
+1. **Algorithm Development**: Use comparative results to improve methods
+2. **Parameter Optimization**: Use meta-parameter testing to tune performance  
+3. **Scalability Testing**: Run experiments on larger datasets
+4. **Real-time Integration**: Deploy best-performing methods in production
+5. **Research Publication**: Use comprehensive analysis for academic papers
 
-## 📈 Performance Tips
-
-1. **Use limits for testing**: Start with `"limit": 1000` for quick tests
-2. **Bulk operations**: Download multiple datasets at once
-3. **Local caching**: The results manager caches data locally
-4. **Monitor Lambda logs**: Check CloudWatch for detailed execution logs
-
-```bash
-# View Lambda logs
-aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/" --region eu-north-1
-``` 
+The system now provides **publication-quality experiment infrastructure** matching the sophistication of the original `experiment_PL.py` while adding cloud-native scalability and automated analysis capabilities. 
