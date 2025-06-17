@@ -7,19 +7,38 @@ FUNCTION_NAME="nyc-data-ingestion"
 REGION="eu-north-1"
 BUCKET_NAME="magisterka"
 
-echo "🚀 Deploying Data Ingestion Lambda Function"
+echo "🚀 Deploying Enhanced Data Ingestion Lambda Function"
 
-# Create deployment package
-echo "📦 Creating deployment package..."
-zip -r lambda-deployment.zip lambda_function.py
+# Clean up any previous deployment artifacts
+rm -rf package lambda-deployment.zip 2>/dev/null || true
+
+# Create deployment package with dependencies
+echo "📦 Creating deployment package with dependencies..."
+
+# Create package directory
+mkdir -p package
+
+# Install dependencies to package directory
+echo "📥 Installing dependencies..."
+pip install --target ./package requests boto3
+
+# Copy our Lambda function
+echo "📋 Copying Lambda function..."
+cp lambda_function.py package/
+
+# Create deployment zip
+echo "🗜️  Creating deployment zip..."
+cd package
+zip -r ../lambda-deployment.zip .
+cd ..
 
 # Deploy or update Lambda function
-if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/dev/null; then
+if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION > /dev/null 2>&1; then
     echo "📝 Updating existing Lambda function..."
     aws lambda update-function-code \
         --function-name $FUNCTION_NAME \
         --zip-file fileb://lambda-deployment.zip \
-        --region $REGION
+        --region $REGION > /dev/null
 else
     echo "🆕 Creating new Lambda function..."
     # Get AWS Account ID
@@ -31,39 +50,65 @@ else
         --handler lambda_function.lambda_handler \
         --zip-file fileb://lambda-deployment.zip \
         --timeout 900 \
-        --memory-size 512 \
+        --memory-size 1024 \
         --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
-        --region $REGION
+        --region $REGION > /dev/null
 fi
 
-# Update environment variables
-echo "🔧 Setting environment variables..."
+# Update environment variables and configuration
+echo "🔧 Setting environment variables and configuration..."
 aws lambda update-function-configuration \
     --function-name $FUNCTION_NAME \
     --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
-    --region $REGION
+    --timeout 900 \
+    --memory-size 1024 \
+    --region $REGION > /dev/null
 
 # Cleanup
-rm lambda-deployment.zip
+rm -rf package lambda-deployment.zip
 
 echo "✅ Lambda function deployed successfully!"
-echo "Function Name: $FUNCTION_NAME"
-echo "Region: $REGION"
+echo "📊 Function Details:"
+echo "  Name: $FUNCTION_NAME"
+echo "  Region: $REGION"
+echo "  Runtime: python3.9"
+echo "  Memory: 1024MB"
+echo "  Timeout: 900s"
 
 # Test the function
-echo "🧪 Testing function with sample data..."
+echo ""
+echo "🧪 Testing enhanced function with sample data..."
+sleep 5  # Give Lambda a moment to be ready
+
 aws lambda invoke \
     --function-name $FUNCTION_NAME \
     --payload '{
         "action": "download_single",
-        "vehicle_type": "green",
+        "vehicle_type": "green", 
         "year": 2019,
         "month": 3,
         "limit": 100
     }' \
     --region $REGION \
-    test-output.json
+    --cli-binary-format raw-in-base64-out \
+    test-output.json > /dev/null
 
-echo "📄 Test output:"
-cat test-output.json && echo
-rm test-output.json 
+echo "📄 Test Results:"
+if [[ -f test-output.json ]]; then
+    # Parse response for better display
+    local status_code=$(cat test-output.json | jq -r '.statusCode // "unknown"' 2>/dev/null)
+    local response_body=$(cat test-output.json | jq -r '.body // ""' 2>/dev/null)
+    
+    echo "  Status Code: $status_code"
+    if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+        echo "  Response:"
+        echo "$response_body" | jq . 2>/dev/null || echo "$response_body"
+    fi
+    
+    rm test-output.json
+else
+    echo "  ❌ No test output file generated"
+fi
+
+echo ""
+echo "🎉 Deployment complete! Function is ready for use." 

@@ -44,7 +44,7 @@ class ExperimentResultsManager:
     def list_experiments(self, experiment_type: str = 'rideshare',
                         days_back: int = 30) -> List[Dict[str, Any]]:
         """
-        List available experiments from S3, supporting both legacy and new path structures.
+        List available experiments from S3, supporting partitioned structure.
         
         Args:
             experiment_type: Type of experiments to list
@@ -53,52 +53,66 @@ class ExperimentResultsManager:
         Returns:
             List of experiment metadata
         """
-        prefixes = [
+        # New partitioned structure: experiments/results/rideshare/type=*/eval=*/year=*/month=*/
+        prefixes = []
+        
+        # Build prefixes for partitioned structure
+        base_prefix = f"experiments/results/{experiment_type}/"
+        for vehicle_type in ['green', 'yellow', 'fhv']:
+            for eval_type in ['pl', 'sigmoid']:
+                prefixes.append(f"{base_prefix}type={vehicle_type}/eval={eval_type}/")
+        
+        # Also check legacy structure
+        prefixes.extend([
             f"experiments/results/{experiment_type}/",
             f"experiments/results/{experiment_type}/pl/",
             f"experiments/results/{experiment_type}/sigmoid/"
-        ]
+        ])
+        
         cutoff_date = datetime.now() - timedelta(days=days_back)
         
         try:
             experiments = []
             
             for prefix in prefixes:
-                response = self.s3_client.list_objects_v2(
-                    Bucket=self.bucket_name,
-                    Prefix=prefix
-                )
-                
-                for obj in response.get('Contents', []):
-                    if obj['Key'].endswith('.json'):
-                        # Filter by date
-                        if obj['LastModified'].replace(tzinfo=None) >= cutoff_date:
-                            experiment_id = Path(obj['Key']).stem.replace('_results', '')
-                            
-                            # Determine acceptance function from path
-                            acceptance_function = 'Unknown'
-                            if '/pl/' in obj['Key']:
-                                acceptance_function = 'PL'
-                            elif '/sigmoid/' in obj['Key']:
-                                acceptance_function = 'Sigmoid'
-                            
-                            experiments.append({
-                                'key': obj['Key'],
-                                'filename': Path(obj['Key']).name,
-                                'size': obj['Size'],
-                                'last_modified': obj['LastModified'],
-                                'experiment_id': experiment_id,
-                                'acceptance_function': acceptance_function,
-                                's3_url': f"s3://{self.bucket_name}/{obj['Key']}"
-                            })
+                try:
+                    response = self.s3_client.list_objects_v2(
+                        Bucket=self.bucket_name,
+                        Prefix=prefix
+                    )
+                    
+                    for obj in response.get('Contents', []):
+                        if obj['Key'].endswith('.json'):
+                            # Filter by date
+                            if obj['LastModified'].replace(tzinfo=None) >= cutoff_date:
+                                
+                                # Extract metadata from path
+                                experiment_id = self._extract_experiment_id_from_path(obj['Key'])
+                                vehicle_type = self._extract_vehicle_type_from_path(obj['Key'])
+                                acceptance_function = self._extract_acceptance_function_from_path(obj['Key'])
+                                
+                                experiments.append({
+                                    'key': obj['Key'],
+                                    'filename': Path(obj['Key']).name,
+                                    'size': obj['Size'],
+                                    'last_modified': obj['LastModified'],
+                                    'experiment_id': experiment_id,
+                                    'vehicle_type': vehicle_type,
+                                    'acceptance_function': acceptance_function,
+                                    's3_url': f"s3://{self.bucket_name}/{obj['Key']}"
+                                })
+                except Exception as e:
+                    logger.debug(f"No objects found in prefix {prefix}: {e}")
+                    continue
             
             # Remove duplicates and sort by date (newest first)
             seen_ids = set()
             unique_experiments = []
             for exp in experiments:
-                if exp['experiment_id'] not in seen_ids:
+                exp_key = f"{exp['experiment_id']}_{exp['acceptance_function']}"
+                if exp_key not in seen_ids:
                     unique_experiments.append(exp)
-                    seen_ids.add(exp['experiment_id'])
+                    seen_ids.add(exp_key)
             
             unique_experiments.sort(key=lambda x: x['last_modified'], reverse=True)
             
@@ -108,6 +122,51 @@ class ExperimentResultsManager:
         except Exception as e:
             logger.error(f"❌ Failed to list experiments: {e}")
             return []
+    
+    def _extract_experiment_id_from_path(self, s3_key: str) -> str:
+        """Extract experiment ID from S3 path"""
+        filename = Path(s3_key).stem
+        if filename.startswith('run_'):
+            # New format: run_20250617_220136.json
+            return filename
+        else:
+            # Legacy format: experiment_id_results.json
+            return filename.replace('_results', '')
+    
+    def _extract_vehicle_type_from_path(self, s3_key: str) -> str:
+        """Extract vehicle type from S3 path"""
+        if '/type=' in s3_key:
+            # New partitioned format
+            parts = s3_key.split('/type=')
+            if len(parts) > 1:
+                return parts[1].split('/')[0]
+        
+        # Try to extract from experiment ID or path
+        if 'green' in s3_key:
+            return 'green'
+        elif 'yellow' in s3_key:
+            return 'yellow'
+        elif 'fhv' in s3_key:
+            return 'fhv'
+        
+        return 'unknown'
+    
+    def _extract_acceptance_function_from_path(self, s3_key: str) -> str:
+        """Extract acceptance function from S3 path"""
+        if '/eval=' in s3_key:
+            # New partitioned format
+            parts = s3_key.split('/eval=')
+            if len(parts) > 1:
+                eval_type = parts[1].split('/')[0]
+                return eval_type.upper()
+        
+        # Legacy format
+        if '/pl/' in s3_key:
+            return 'PL'
+        elif '/sigmoid/' in s3_key:
+            return 'Sigmoid'
+        
+        return 'Unknown'
     
     def load_experiment_results(self, experiment_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -119,12 +178,24 @@ class ExperimentResultsManager:
         Returns:
             Experiment results data
         """
-        # Try different possible S3 key patterns
-        possible_keys = [
+        # Build possible S3 key patterns for both old and new structures
+        possible_keys = []
+        
+        # New partitioned structure patterns
+        for vehicle_type in ['green', 'yellow', 'fhv']:
+            for eval_type in ['pl', 'sigmoid']:
+                for year in range(2019, 2025):
+                    for month in range(1, 13):
+                        # Pattern: experiments/results/rideshare/type=green/eval=pl/year=2019/month=03/run_20250617_220136.json
+                        possible_keys.append(f"experiments/results/rideshare/type={vehicle_type}/eval={eval_type}/year={year}/month={month:02d}/{experiment_id}.json")
+        
+        # Legacy structure patterns
+        legacy_patterns = [
             f"experiments/results/rideshare/{experiment_id}_results.json",
             f"experiments/results/rideshare/pl/{experiment_id}_results.json",
             f"experiments/results/rideshare/sigmoid/{experiment_id}_results.json"
         ]
+        possible_keys.extend(legacy_patterns)
         
         cache_file = self.local_cache_dir / f"{experiment_id}_results.json"
         
@@ -137,22 +208,21 @@ class ExperimentResultsManager:
                     with open(cache_file, 'r') as f:
                         return json.load(f)
             
-            # Try each possible S3 key
-            for s3_key in possible_keys:
-                try:
-                    logger.info(f"📥 Trying to download {s3_key}")
-                    response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-                    results = json.loads(response['Body'].read().decode('utf-8'))
-                    
-                    # Cache locally
-                    with open(cache_file, 'w') as f:
-                        json.dump(results, f, indent=2)
-                    
-                    logger.info(f"✅ Loaded results for {experiment_id}")
-                    return results
-                    
-                except self.s3_client.exceptions.NoSuchKey:
-                    continue
+            # Try to find the file using S3 list with prefix matching
+            # This is more efficient than trying every possible key
+            found_key = self._find_experiment_file(experiment_id)
+            
+            if found_key:
+                logger.info(f"📥 Downloading results from {found_key}")
+                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=found_key)
+                results = json.loads(response['Body'].read().decode('utf-8'))
+                
+                # Cache locally
+                with open(cache_file, 'w') as f:
+                    json.dump(results, f, indent=2)
+                
+                logger.info(f"✅ Loaded results for {experiment_id}")
+                return results
             
             logger.error(f"❌ No results found for {experiment_id} in any location")
             return None
@@ -160,6 +230,46 @@ class ExperimentResultsManager:
         except Exception as e:
             logger.error(f"❌ Failed to load results for {experiment_id}: {e}")
             return None
+    
+    def _find_experiment_file(self, experiment_id: str) -> Optional[str]:
+        """Find experiment file using S3 list operations"""
+        
+        # Search in partitioned structure
+        try:
+            # Try to list all experiment files and find matching one
+            prefixes_to_search = [
+                "experiments/results/rideshare/type=green/",
+                "experiments/results/rideshare/type=yellow/", 
+                "experiments/results/rideshare/type=fhv/",
+                "experiments/results/rideshare/pl/",
+                "experiments/results/rideshare/sigmoid/",
+                "experiments/results/rideshare/"
+            ]
+            
+            for prefix in prefixes_to_search:
+                try:
+                    response = self.s3_client.list_objects_v2(
+                        Bucket=self.bucket_name,
+                        Prefix=prefix
+                    )
+                    
+                    for obj in response.get('Contents', []):
+                        key = obj['Key']
+                        filename = Path(key).stem
+                        
+                        # Check if this file matches our experiment ID
+                        if (experiment_id in filename or 
+                            filename.replace('_results', '') == experiment_id or
+                            filename == experiment_id):
+                            return key
+                            
+                except Exception:
+                    continue
+            
+        except Exception as e:
+            logger.debug(f"Error searching for experiment file: {e}")
+        
+        return None
     
     def analyze_comparative_experiment(self, experiment_data: Dict[str, Any]) -> str:
         """Analyze a comparative experiment with multiple methods."""
