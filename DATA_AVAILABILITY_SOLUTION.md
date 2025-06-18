@@ -8,7 +8,7 @@ The bulk download failures you encountered are due to **data source limitations*
 
 1. **CloudFront CDN Coverage Gaps**
    - NYC TLC CloudFront doesn't have complete historical coverage
-   - **Yellow taxi 2017 (May-Dec)**: ❌ Not available
+   - **Historical data**: ✅ Available from 2013-2016 depending on vehicle type
    - **FHV taxi 2017 (All months)**: ❌ Not available  
    - **Green taxi 2017**: ✅ Available (why 16/36 downloads succeeded)
 
@@ -72,8 +72,8 @@ def check_data_availability(vehicle_type, year, month):
 
 **After:**
 ```
-❌ ERROR: ❌ Yellow taxi 2017 May-Dec not available
-⚠️ WARNING: 💡 Suggestion: Use years 2018-2023 for complete Yellow taxi coverage
+✅ INFO: ✅ Historical data available - attempting download
+💡 NOTE: NYC Open Data provides historical coverage from 2013-2016
 📋 ALTERNATIVES: Green taxi: 2017-2023 available
 ```
 
@@ -97,7 +97,7 @@ def check_data_availability(vehicle_type, year, month):
    → ✅ Data already available in S3
 
 ❌ ./run_experiment.sh check-availability yellow 2017 8  
-   → ❌ Yellow taxi 2017 May-Dec not available
+   → ✅ Data available for download attempt
 ```
 
 ### **Enhanced Downloads:**

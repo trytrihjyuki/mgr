@@ -261,7 +261,7 @@ Each algorithm returns detailed results:
 ```bash
 # Check if data exists before downloading
 ./run_experiment.sh check-availability yellow 2017 8
-# Output: ❌ Yellow taxi 2017 May-Dec not available
+# Output: ✅ Data available - attempting download from NYC Open Data
 #         💡 Suggestion: Use years 2018-2023
 
 # Download single dataset

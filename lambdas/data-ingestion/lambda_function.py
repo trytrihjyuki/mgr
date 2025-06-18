@@ -103,19 +103,13 @@ def check_data_availability(vehicle_type, year, month):
         "notes": []
     }
     
-    # Known data availability patterns
-    if year < 2018:
-        if vehicle_type == "fhv":
-            availability_info["available"] = False
-            availability_info["confidence"] = "low"
-            availability_info["alternatives"].append("Use 2018-2023 for FHV data")
-            availability_info["notes"].append("FHV data before 2018 is not available on CloudFront")
-        
-        elif vehicle_type == "yellow" and month >= 5:
-            availability_info["available"] = False
-            availability_info["confidence"] = "low"
-            availability_info["alternatives"].append("Use 2018-2023 for complete Yellow taxi coverage")
-            availability_info["notes"].append("Yellow taxi 2017 May-Dec not available on CloudFront")
+    # Known data availability patterns - Updated based on NYC Open Data availability
+    # NYC Open Data has historical data going back to 2013-2016 depending on vehicle type
+    # Allow download attempts rather than blocking preemptively
+    if year < 2013:
+        availability_info["confidence"] = "low"
+        availability_info["notes"].append("Data before 2013 may have limited availability")
+        availability_info["alternatives"].append("Try years 2013-2023 for better coverage")
     
     elif year >= 2024:
         availability_info["confidence"] = "medium"

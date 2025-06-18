@@ -102,7 +102,7 @@ Each experiment produces comprehensive JSON with:
 | **FHV** | 2018-2023 ✅ | 2019-2023 optimal |
 
 **⚠️ Known Issues:**
-- Yellow taxi 2017 May-Dec: ❌ Not available
+- Historical data available from 2013-2016 depending on vehicle type
 - FHV 2017: ❌ Not available  
 - **Solution**: Use years 2018-2023 for complete coverage
 

@@ -986,18 +986,9 @@ check_data_availability() {
         return 0
     fi
     
-    # Check known availability patterns
-    if [ "$year" -lt 2018 ]; then
-        if [ "$vehicle_type" = "fhv" ]; then
-            log_error "❌ FHV data before 2018 is not available"
-            log_warning "💡 Suggestion: Use years 2018-2023 for FHV data"
-            return 1
-        elif [ "$vehicle_type" = "yellow" ] && [ "$month" -ge 5 ]; then
-            log_error "❌ Yellow taxi 2017 May-Dec not available"
-            log_warning "💡 Suggestion: Use years 2018-2023 for complete Yellow taxi coverage"
-            return 1
-        fi
-    fi
+    # Check known availability patterns - Allow download attempts for all years
+    # NYC Open Data has historical data going back to 2013-2016 depending on vehicle type
+    # Let the actual download process determine availability rather than blocking preemptively
     
     log_warning "⚠️ Data not in S3, will attempt download"
     return 0
@@ -1046,7 +1037,7 @@ download_bulk_enhanced() {
     
     if [ "$likely_failures" -gt 0 ]; then
         log_warning "⚠️ Pre-check indicates $likely_failures/$total_requests requests may fail"
-        log_warning "💡 Consider using years 2018-2023 for better data coverage"
+        log_warning "💡 Note: NYC Open Data has historical data available from 2013-2016 depending on vehicle type"
         
         read -p "Continue anyway? (y/N): " -n 1 -r
         echo
