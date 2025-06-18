@@ -408,7 +408,10 @@ Data Period: {params.get('year', 'Unknown')}/{params.get('month', 'Unknown'):02d
         acceptance_function = experiment_params.get('acceptance_function', 'Unknown')
         num_eval = experiment_params.get('num_eval', 100)
         
-        s3_key = experiment_data.get('s3_key', f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/unified_{exp_id.split('_')[-2]}_{exp_id.split('_')[-1]}.json")
+        # Extract month from experiment if available, fallback to first month
+        months = experiment_params.get('months', [1])
+        month = months[0] if months else 1
+        s3_key = experiment_data.get('s3_key', f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/unified_{exp_id.split('_')[-2]}_{exp_id.split('_')[-1]}.json")
         s3_url = f"s3://{self.bucket_name}/{s3_key}"
         
         report = f"""
