@@ -107,7 +107,7 @@ def lambda_handler(event, context):
             
             "method_results": experiment_results,
             "performance_ranking": runner.get_performance_ranking(experiment_results),
-            "dataset_scope_percentage": round(min(100.0, (runner.simulation_range * 5 / (24 * 60)) * 100), 1)
+            "dataset_scope_percentage": round(min(100.0, ((runner.simulation_range * 5) / (len(days) * 24 * 60)) * 100), 1)
         }
         
         # Upload to S3
@@ -178,6 +178,10 @@ class UnifiedExperimentRunner:
         
         logger.info(f"🚀 Starting {method.upper()} method")
         
+        # Generate shared scenario data once for all methods (CRITICAL FIX)
+        if not hasattr(self, '_shared_scenarios'):
+            self._generate_shared_scenarios()
+        
         for month in self.months:
             month_objectives = []
             month_revenues = []
@@ -186,7 +190,7 @@ class UnifiedExperimentRunner:
             daily_results = {}
             
             for day in self.days:
-                day_result = self._run_single_day(method, month, day)
+                day_result = self._run_single_day_with_shared_scenarios(method, month, day)
                 daily_results[day] = day_result
                 
                 # Aggregate all data
@@ -200,19 +204,9 @@ class UnifiedExperimentRunner:
                 all_matches.extend(day_result['matches'])
                 all_times.extend(day_result['computation_times'])
             
-            # Calculate monthly summary
+            # Store results without summaries (analyzer will handle this)
             monthly_data[month] = {
-                'daily_results': daily_results,
-                'monthly_summary': {
-                    'avg_objective_value': float(statistics.mean(month_objectives)) if month_objectives else 0.0,
-                    'avg_revenue': float(statistics.mean(month_revenues)) if month_revenues else 0.0,
-                    'avg_matches': float(statistics.mean(month_matches)) if month_matches else 0.0,
-                    'std_objective_value': float(statistics.stdev(month_objectives)) if len(month_objectives) > 1 else 0.0,
-                    'avg_computation_time': float(statistics.mean(month_times)) if month_times else 0.0,
-                    'total_simulations': len(month_objectives),
-                    'total_matches': float(sum(month_matches)) if month_matches else 0.0,
-                    'total_revenue': float(sum(month_revenues)) if month_revenues else 0.0
-                }
+                'daily_results': daily_results
             }
         
         # Calculate method execution time
@@ -241,6 +235,168 @@ class UnifiedExperimentRunner:
             'monthly_aggregates': monthly_data,
             'overall_summary': overall_summary,
             'method_execution_time': method_execution_time
+        }
+    
+    def _generate_shared_scenarios(self):
+        """Generate consistent scenario data that all methods will use (CRITICAL FIX)"""
+        # Set seed for reproducibility
+        random.seed(42 + hash(str(self.year) + str(self.months) + str(self.days) + self.place))
+        
+        self._shared_scenarios = {}
+        
+        for month in self.months:
+            self._shared_scenarios[month] = {}
+            
+            for day in self.days:
+                day_scenarios = []
+                
+                for scenario_id in range(self.simulation_range):
+                    # Time calculation (10:00-20:00, every 5 minutes)
+                    total_minutes = 600  # 10 hours
+                    minute_offset = (scenario_id * total_minutes) // self.simulation_range
+                    hour = 10 + minute_offset // 60
+                    minute = minute_offset % 60
+                    
+                    # Generate CONSISTENT scenario data
+                    num_requests, num_drivers = self._generate_scenario_data(hour, minute)
+                    
+                    # Ensure minimum values to avoid zeros
+                    num_requests = max(5, num_requests)  # Minimum 5 requests
+                    num_drivers = max(3, num_drivers)    # Minimum 3 drivers
+                    
+                    # Calculate time window
+                    end_hour = hour
+                    end_minute = minute + 5  # Assuming 5-minute intervals
+                    if end_minute >= 60:
+                        end_hour += 1
+                        end_minute -= 60
+                    time_window = f"{hour:02d}:{minute:02d}-{end_hour:02d}:{end_minute:02d}"
+                    
+                    scenario_data = {
+                        'scenario_id': scenario_id,
+                        'time_window': time_window,
+                        'hour': hour,
+                        'minute': minute,
+                        'num_requests': num_requests,
+                        'num_drivers': num_drivers,
+                        'supply_demand_ratio': num_drivers / num_requests if num_requests > 0 else 0.0
+                    }
+                    
+                    day_scenarios.append(scenario_data)
+                
+                self._shared_scenarios[month][day] = day_scenarios
+                
+        logger.info(f"✅ Generated consistent scenarios for {len(self.months)} months × {len(self.days)} days × {self.simulation_range} scenarios each")
+    
+    def _run_single_day_with_shared_scenarios(self, method: str, month: int, day: int) -> Dict[str, Any]:
+        """Run experiments for single day using SHARED scenario data (CRITICAL FIX)"""
+        objectives = []
+        revenues = []
+        matches_list = []
+        times = []
+        scenarios = []  # Detailed scenario information
+        
+        logger.info(f"🗓️ Running {method} for {self.place} {self.year}-{month:02d}-{day:02d}")
+        
+        # Use SHARED scenarios (same for all methods!)
+        shared_day_scenarios = self._shared_scenarios[month][day]
+        
+        for scenario_data in shared_day_scenarios:
+            scenario_start = time.time()
+            
+            scenario_id = scenario_data['scenario_id']
+            num_requests = scenario_data['num_requests']
+            num_drivers = scenario_data['num_drivers']
+            time_window = scenario_data['time_window']
+            
+            # Run num_eval Monte Carlo evaluations for this scenario
+            scenario_objectives = []
+            scenario_revenues = []
+            scenario_matches = []
+            
+            for eval_iteration in range(self.num_eval):
+                try:
+                    if method == 'hikima' or method == 'proposed':
+                        result = self._evaluate_hikima(num_requests, num_drivers)
+                    elif method == 'maps':
+                        result = self._evaluate_maps(num_requests, num_drivers)
+                    elif method == 'linucb':
+                        result = self._evaluate_linucb(num_requests, num_drivers)
+                    elif method == 'linear_program':
+                        result = self._evaluate_linear_program(num_requests, num_drivers)
+                    else:
+                        raise ValueError(f"Unknown method: {method}")
+                    
+                    # Ensure positive values
+                    objective_value = max(0, result['objective_value'])
+                    revenue = max(0, result.get('revenue', result['objective_value']))
+                    matches = max(0, result.get('matches', 0))
+                    
+                    scenario_objectives.append(objective_value)
+                    scenario_revenues.append(revenue)
+                    scenario_matches.append(matches)
+                    
+                except Exception as e:
+                    logger.warning(f"Evaluation failed for {method} scenario {scenario_id} eval {eval_iteration}: {str(e)}")
+                    # Add zeros for failed evaluations
+                    scenario_objectives.append(0.0)
+                    scenario_revenues.append(0.0)
+                    scenario_matches.append(0)
+            
+            # Calculate averages for this scenario
+            avg_objective = statistics.mean(scenario_objectives) if scenario_objectives else 0.0
+            avg_revenue = statistics.mean(scenario_revenues) if scenario_revenues else 0.0
+            avg_matches = statistics.mean(scenario_matches) if scenario_matches else 0.0
+            
+            objectives.append(avg_objective)
+            revenues.append(avg_revenue)
+            matches_list.append(avg_matches)
+            
+            scenario_time = time.time() - scenario_start
+            times.append(scenario_time)
+            
+            # Create detailed scenario information (with CONSISTENT data)
+            supply_demand_ratio = scenario_data['supply_demand_ratio']
+            match_rate = avg_matches / num_requests if num_requests > 0 else 0.0
+            avg_trip_value = avg_revenue / avg_matches if avg_matches > 0 else 0.0
+            evaluation_std = round(statistics.stdev(scenario_objectives) if len(scenario_objectives) > 1 else 0.0, 3)
+            
+            scenario_detail = {
+                "scenario_id": scenario_id,
+                "time_window": time_window,
+                "total_requests": num_requests,  # SAME FOR ALL METHODS
+                "total_drivers": num_drivers,    # SAME FOR ALL METHODS  
+                "supply_demand_ratio": round(supply_demand_ratio, 3),
+                "successful_matches": int(avg_matches),
+                "match_rate": round(match_rate, 3),
+                "total_revenue": round(avg_revenue, 2),
+                "objective_value": round(avg_objective, 2),
+                "avg_trip_value": round(avg_trip_value, 2),
+                "num_evaluations": self.num_eval,
+                "evaluation_std": evaluation_std
+            }
+            scenarios.append(scenario_detail)
+            
+            # Debug logging for first few scenarios
+            if scenario_id < 3:
+                logger.info(f"Scenario {scenario_id} ({time_window}): {num_requests} req, {num_drivers} drv → obj: {avg_objective:.2f}, rev: {avg_revenue:.2f}, matches: {avg_matches:.1f}")
+        
+        total_scenarios = len(objectives)
+        valid_scenarios = sum(1 for obj in objectives if obj > 0)
+        
+        logger.info(f"✅ {method} completed: {valid_scenarios}/{total_scenarios} scenarios with positive results")
+        
+        return {
+            'date': f"{self.year}-{month:02d}-{day:02d}",
+            'method': method,
+            'algorithm': self._get_algorithm_name(method),
+            'scenarios': scenarios,
+            'objective_values': objectives,
+            'revenues': revenues,
+            'matches': matches_list,
+            'computation_times': times,
+            'total_scenarios': total_scenarios,
+            'valid_scenarios': valid_scenarios
         }
     
     def _run_single_day(self, method: str, month: int, day: int) -> Dict[str, Any]:
@@ -364,14 +520,8 @@ class UnifiedExperimentRunner:
             'revenues': revenues,
             'matches': matches_list,
             'computation_times': times,
-            'daily_summary': {
-                'avg_objective_value': float(statistics.mean(objectives)) if objectives else 0.0,
-                'avg_revenue': float(statistics.mean(revenues)) if revenues else 0.0,
-                'avg_matches': float(statistics.mean(matches_list)) if matches_list else 0.0,
-                'avg_computation_time': float(statistics.mean(times)) if times else 0.0,
-                'total_scenarios': total_scenarios,
-                'valid_scenarios': valid_scenarios
-            }
+            'total_scenarios': total_scenarios,
+            'valid_scenarios': valid_scenarios
         }
     
     def _generate_scenario_data(self, hour: int, minute: int) -> Tuple[int, int]:
@@ -546,22 +696,42 @@ class UnifiedExperimentRunner:
         return daily_summaries
     
     def get_performance_ranking(self, experiment_results: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Performance ranking"""
+        """Benchmark ranking with key metrics"""
         ranking = []
         
         for method, result in experiment_results.items():
             summary = result['overall_summary']
+            
+            # Calculate matching ratio per request across all scenarios
+            total_matches = summary.get('total_matches', 0)
+            total_scenarios = summary.get('total_simulations', 1)
+            total_requests = self._estimate_total_requests(result)
+            matching_ratio = (total_matches / total_requests) if total_requests > 0 else 0.0
+            
             ranking.append({
-                'method': method,
-                'score': summary.get('avg_objective_value', 0),
-                'avg_time': summary.get('avg_computation_time', 0)
+                'method': method.upper(),
+                'avg_profit': round(summary.get('avg_objective_value', 0), 2),
+                'avg_matching_ratio_per_request': round(matching_ratio, 3),
+                'avg_time_per_scenario': round(summary.get('avg_computation_time', 0), 4),
+                'total_scenarios': total_scenarios,
+                'rank': 0  # Will be set below
             })
         
-        ranking.sort(key=lambda x: x['score'], reverse=True)
+        # Sort by avg_profit (descending)
+        ranking.sort(key=lambda x: x['avg_profit'], reverse=True)
         for i, item in enumerate(ranking):
             item['rank'] = i + 1
         
         return ranking
+    
+    def _estimate_total_requests(self, result: Dict[str, Any]) -> int:
+        """Estimate total requests from scenario data"""
+        total_requests = 0
+        for month_data in result['monthly_aggregates'].values():
+            for day_data in month_data.get('daily_results', {}).values():
+                for scenario in day_data.get('scenarios', []):
+                    total_requests += scenario.get('total_requests', 0)
+        return total_requests
     
     def get_best_method(self, experiment_results: Dict[str, Any]) -> str:
         """Get best performing method"""

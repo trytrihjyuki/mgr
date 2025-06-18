@@ -63,6 +63,8 @@ show_help() {
     echo "  run-experiment <start_hour> <end_hour> <time_interval> <place> <time_step> <month> <day> <year> [vehicle_type] [methods] [acceptance_func]"
     echo "    Example: run-experiment 10 20 5m Manhattan 30s 10 6 2019 green \"hikima,maps,linucb,linear_program\" PL"
     echo "    Example: run-experiment 10 20 5m Bronx 300s 10 6 2019"
+    echo "  run-experiment-24h <time_interval> <place> <time_step> <month> <day> <year> [vehicle_type] [methods] [acceptance_func]"
+    echo "    Example: run-experiment-24h 30m Manhattan 30s 10 6 2019 green \"hikima,maps\" PL"
     echo "  run-multi-month <start_hour> <end_hour> <time_interval> <place> <time_step> <months> <days> <year> [vehicle_type] [methods] [acceptance_func]"
     echo "    Example: run-multi-month 10 20 5m Manhattan 30s \"3,4,5\" \"6,10\" 2019 green \"hikima,maps\" PL"
     echo ""
@@ -803,6 +805,30 @@ run_multi_month_unified() {
     fi
 }
 
+# 24-hour unified experiment function
+run_unified_experiment_24h() {
+    local time_interval=$1
+    local place=$2
+    local time_step=$3
+    local month=$4
+    local day=$5
+    local year=$6
+    local vehicle_type=${7:-green}
+    local methods_str=${8:-"hikima,maps,linucb,linear_program"}
+    local acceptance_func=${9:-PL}
+    
+    log_info "💪 Running 24-hour unified experiment (0:00-24:00)"
+    log_progress "🌍 Location: $place"
+    log_progress "📅 Date: $year-$(printf %02d $month)-$(printf %02d $day)"
+    log_progress "🚖 Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]')"
+    log_progress "🔬 Methods: $methods_str"
+    log_progress "⏱️ Time Interval: $time_interval"
+    log_progress "🎯 Acceptance Function: $acceptance_func"
+    
+    # Convert to start_hour=0, end_hour=24
+    run_unified_experiment 0 24 "$time_interval" "$place" "$time_step" "$month" "$day" "$year" "$vehicle_type" "$methods_str" "$acceptance_func" 
+}
+
 # Enhanced analysis
 analyze() {
     local experiment_id=$1
@@ -880,6 +906,14 @@ main() {
                 return 1
             fi
             run_unified_experiment "${@:2}"
+            ;;
+        "run-experiment-24h")
+            if [[ $# -lt 7 ]]; then
+                log_error "Usage: $0 run-experiment-24h <time_interval> <place> <time_step> <month> <day> <year> [vehicle_type] [methods] [acceptance_func]"
+                log_error "Example: $0 run-experiment-24h 30m Manhattan 30s 10 6 2019 green \"hikima,maps\" PL"
+                return 1
+            fi
+            run_unified_experiment_24h "${@:2}"
             ;;
         "run-multi-month")
             if [[ $# -lt 9 ]]; then

@@ -433,15 +433,22 @@ Timestamp: {experiment_data.get('timestamp', 'Unknown')}
   • Acceptance Function: {acceptance_function}
   • Monte Carlo Evaluations: {num_eval}
 
-🏆 Performance Ranking:
+🏆 Performance Benchmark:
 """
         
-        # Performance ranking
+        # Performance ranking with detailed benchmark metrics
         if performance_ranking:
-            for i, method_data in enumerate(performance_ranking, 1):
+            for method_data in performance_ranking:
                 method = method_data.get('method', 'Unknown')
-                score = method_data.get('avg_objective_value', 0)
-                report += f"  {i}. {method.upper()}: {score:.2f}\n"
+                profit = method_data.get('avg_profit', 0)
+                matching_ratio = method_data.get('avg_matching_ratio_per_request', 0)
+                time_per_scenario = method_data.get('avg_time_per_scenario', 0)
+                rank = method_data.get('rank', 0)
+                
+                report += f"  {rank}. {method}:\n"
+                report += f"     • Avg Profit: ${profit:,.2f}\n"
+                report += f"     • Matching Ratio: {matching_ratio:.1%} per request\n"
+                report += f"     • Avg Time per Scenario: {time_per_scenario:.4f}s\n\n"
         else:
             report += "  No ranking available\n"
         

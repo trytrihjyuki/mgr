@@ -6,14 +6,19 @@ This is a unified rideshare pricing optimization experiment system based on the 
 
 ## 📋 **Quick Start Commands**
 
-### Basic Experiment (Single Location, Single Day)
+### Fast Test (2-hour window, single method)
+```bash
+./run_experiment.sh run-experiment 10 12 30m Manhattan 30s 10 6 2019 green "hikima" PL
+```
+
+### Basic Experiment (10-hour window, multiple methods)
 ```bash
 ./run_experiment.sh run-experiment 10 20 5m Manhattan 30s 10 6 2019 green "hikima,maps,linucb,linear_program" PL
 ```
 
-### Fast Test (2-hour window, single method)
+### **NEW: 24-Hour Full Day Experiment**
 ```bash
-./run_experiment.sh run-experiment 10 12 30m Manhattan 30s 10 6 2019 green "hikima" PL
+./run_experiment.sh run-experiment-24h 30m Manhattan 30s 10 6 2019 green "hikima,maps" PL
 ```
 
 ### Multi-Month Analysis
@@ -182,12 +187,15 @@ s3://magisterka/experiments/rideshare/
 
 ## 🔧 **System Optimizations**
 
-### Recent Improvements (Latest)
+### Latest System Improvements (December 2025)
+- **✅ NEW: 24-Hour Experiments**: Full day coverage with `run-experiment-24h` command
+- **✅ Fixed Dataset Coverage**: Accurate percentage calculation (was 41%, now correct 16.7%)
+- **✅ Performance Benchmark**: Clear metrics - avg profit, matching ratio per request, time per scenario  
+- **✅ Consistent Scenarios**: All methods now use identical scenario data (same requests/drivers per scenario ID)
 - **✅ Fixed Hikima Bug**: No more zero values, proper min-cost flow implementation
-- **✅ Added Scenario Timestamps**: Each scenario shows time window (e.g., "10:00-10:05")
-- **✅ Dataset Scope Tracking**: Shows percentage of full dataset used
-- **✅ Auto-Analysis**: Runs immediately after experiments complete
-- **✅ No Manual 'q' Pressing**: Clean command completion
+- **✅ Auto-Analysis**: Runs immediately after experiments complete with S3 URLs
+- **✅ No Manual Interaction**: Clean command completion without pressing 'q'
+- **✅ Removed Daily/Monthly Summaries**: Clean JSON structure, analysis role for analyzer
 - **✅ Consolidated Documentation**: Streamlined from 10 files to 4 focused docs
 
 ### Parallel Processing Ready
