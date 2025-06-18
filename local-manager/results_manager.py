@@ -408,12 +408,16 @@ Data Period: {params.get('year', 'Unknown')}/{params.get('month', 'Unknown'):02d
         acceptance_function = experiment_params.get('acceptance_function', 'Unknown')
         num_eval = experiment_params.get('num_eval', 100)
         
+        s3_key = experiment_data.get('s3_key', f"experiments/rideshare/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/unified_{exp_id.split('_')[-2]}_{exp_id.split('_')[-1]}.json")
+        s3_url = f"s3://{self.bucket_name}/{s3_key}"
+        
         report = f"""
 🧪 Unified Rideshare Experiment Analysis: {exp_id}
 {'='*80}
 Status: ✅ COMPLETED
 Execution Time: {experiment_data.get('execution_time_seconds', 0):.2f} seconds
 Timestamp: {experiment_data.get('timestamp', 'Unknown')}
+🔗 S3 Location: {s3_url}
 
 📋 Original Setup (experiment_PL.py format):
   • Place: {place}
@@ -455,7 +459,6 @@ Timestamp: {experiment_data.get('timestamp', 'Unknown')}
                     'Avg Objective': f"{summary.get('avg_objective_value', 0):,.2f}",
                     'Avg Revenue': f"{summary.get('avg_revenue', 0):,.2f}",
                     'Total Matches': f"{summary.get('total_matches', 0):,.0f}",
-                    'Success Rate': f"{summary.get('success_rate', 0):.2%}",
                     'Exec Time': f"{exec_time:.3f}s"
                 })
             
@@ -485,16 +488,10 @@ Timestamp: {experiment_data.get('timestamp', 'Unknown')}
     • Months Analyzed: {len(monthly_data)}
 """
         
-        # Monthly breakdown for multi-month experiments
-        monthly_summaries = experiment_data.get('monthly_summaries', {})
-        if monthly_summaries:
-            report += "\n📅 Monthly Performance Summary:\n"
-            for month_key, month_data in monthly_summaries.items():
-                report += f"\n  {month_key}:\n"
-                for method, month_summary in month_data.items():
-                    avg_obj = month_summary.get('avg_objective_value', 0)
-                    total_sims = month_summary.get('total_simulations', 0)
-                    report += f"    • {method.upper()}: {avg_obj:.2f} (from {total_sims} simulations)\n"
+        # Experiment scope information
+        dataset_scope = experiment_data.get('dataset_scope_percentage', 0)
+        if dataset_scope > 0:
+            report += f"\n📊 Dataset Scope: {dataset_scope}% of full day coverage\n"
         
         return report
     
@@ -783,7 +780,8 @@ def main():
     elif args.command == 'analyze':
         result = manager.load_experiment_results(args.experiment_id)
         if result:
-            if result.get('experiment_type') == 'rideshare_comparative':
+            exp_type = result.get('experiment_type', '')
+            if exp_type == 'rideshare_comparative':
                 analysis = manager.analyze_comparative_experiment(result)
                 print(analysis)
                 # Create visualizations
@@ -792,8 +790,11 @@ def main():
                     print(f"\n📊 Visualizations created:")
                     for plot in plots:
                         print(f"  • {plot}")
+            elif exp_type == 'unified_rideshare':
+                analysis = manager.analyze_unified_experiment(result)
+                print(analysis)
             else:
-                print("❌ This is not a comparative experiment. Use 'show' command instead.")
+                print("❌ This is not a comparative or unified experiment. Use 'show' command instead.")
         else:
             print(f"❌ Could not load experiment: {args.experiment_id}")
     

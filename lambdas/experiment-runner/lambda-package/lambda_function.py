@@ -105,10 +105,9 @@ def lambda_handler(event, context):
                 "num_eval": num_eval
             },
             
-            "monthly_summaries": runner.get_monthly_summaries(experiment_results) if len(months) > 1 else None,
-            "daily_summaries": runner.get_daily_summaries(experiment_results),
             "method_results": experiment_results,
-            "performance_ranking": runner.get_performance_ranking(experiment_results)
+            "performance_ranking": runner.get_performance_ranking(experiment_results),
+            "dataset_scope_percentage": round(min(100.0, (runner.simulation_range * 5 / (24 * 60)) * 100), 1)
         }
         
         # Upload to S3
@@ -133,8 +132,7 @@ def lambda_handler(event, context):
                     method: {
                         "avg_objective_value": result['overall_summary'].get('avg_objective_value', 0),
                         "avg_revenue": result['overall_summary'].get('avg_revenue', 0),
-                        "total_matches": result['overall_summary'].get('total_matches', 0),
-                        "success_rate": result['overall_summary'].get('success_rate', 0)
+                        "total_matches": result['overall_summary'].get('total_matches', 0)
                     }
                     for method, result in experiment_results.items()
                 }
@@ -233,8 +231,7 @@ class UnifiedExperimentRunner:
             'method_execution_time': method_execution_time,
             'total_simulations': len(all_objectives),
             'total_matches': float(sum(all_matches)) if all_matches else 0.0,
-            'total_revenue': float(sum(all_revenues)) if all_revenues else 0.0,
-            'success_rate': sum(1 for obj in all_objectives if obj > 0) / len(all_objectives) if all_objectives else 0.0
+            'total_revenue': float(sum(all_revenues)) if all_revenues else 0.0
         }
         
         logger.info(f"✅ {method.upper()} completed: avg_obj={overall_summary['avg_objective_value']:.2f}, total_time={method_execution_time:.3f}s")
@@ -331,7 +328,7 @@ class UnifiedExperimentRunner:
             supply_demand_ratio = num_drivers / num_requests if num_requests > 0 else 0.0
             match_rate = avg_matches / num_requests if num_requests > 0 else 0.0
             avg_trip_value = avg_revenue / avg_matches if avg_matches > 0 else 0.0
-            algorithm_efficiency = 0.85 if method == 'hikima' else (0.78 if method == 'maps' else (0.72 if method == 'linucb' else 0.88))
+            evaluation_std = round(statistics.stdev(scenario_objectives) if len(scenario_objectives) > 1 else 0.0, 3)
             
             scenario_detail = {
                 "scenario_id": scenario,
@@ -344,9 +341,8 @@ class UnifiedExperimentRunner:
                 "total_revenue": round(avg_revenue, 2),
                 "objective_value": round(avg_objective, 2),
                 "avg_trip_value": round(avg_trip_value, 2),
-                "algorithm_efficiency": algorithm_efficiency,
                 "num_evaluations": self.num_eval,
-                "evaluation_std": round(statistics.stdev(scenario_objectives) if len(scenario_objectives) > 1 else 0.0, 3)
+                "evaluation_std": evaluation_std
             }
             scenarios.append(scenario_detail)
             
@@ -359,11 +355,6 @@ class UnifiedExperimentRunner:
         
         logger.info(f"✅ {method} completed: {valid_scenarios}/{total_scenarios} scenarios with positive results")
         
-        # Calculate dataset scope percentage (approximation based on time coverage)
-        total_day_minutes = 24 * 60  # Full day
-        experiment_minutes = total_scenarios * 5  # Assuming 5-minute intervals
-        dataset_scope_percentage = min(100.0, (experiment_minutes / total_day_minutes) * 100)
-        
         return {
             'date': f"{self.year}-{month:02d}-{day:02d}",
             'method': method,
@@ -373,16 +364,13 @@ class UnifiedExperimentRunner:
             'revenues': revenues,
             'matches': matches_list,
             'computation_times': times,
-            'dataset_scope_percentage': round(dataset_scope_percentage, 1),
             'daily_summary': {
                 'avg_objective_value': float(statistics.mean(objectives)) if objectives else 0.0,
                 'avg_revenue': float(statistics.mean(revenues)) if revenues else 0.0,
                 'avg_matches': float(statistics.mean(matches_list)) if matches_list else 0.0,
                 'avg_computation_time': float(statistics.mean(times)) if times else 0.0,
                 'total_scenarios': total_scenarios,
-                'valid_scenarios': valid_scenarios,
-                'success_rate': valid_scenarios / total_scenarios if total_scenarios > 0 else 0.0,
-                'dataset_scope_percentage': round(dataset_scope_percentage, 1)
+                'valid_scenarios': valid_scenarios
             }
         }
     
