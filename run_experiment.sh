@@ -631,6 +631,11 @@ run_unified_experiment() {
     fi
     local simulation_range=$(( total_minutes / interval_minutes ))
     
+    # Log experiment size for info
+    local num_methods=$(echo "$methods_str" | tr ',' '\n' | wc -l | xargs)
+    local total_evaluations=$(( simulation_range * 100 * num_methods ))
+    log_info "💪 Running $total_evaluations total evaluations ($simulation_range scenarios × $num_methods methods × 100 evals)"
+    
     log_info "🧪 Starting unified experiment (based on experiment_PL.py)"
     log_progress "📍 Place: $place"
     log_progress "📅 Date: $year-$(printf %02d $month)-$(printf %02d $day)"
@@ -650,8 +655,6 @@ run_unified_experiment() {
     log_progress "✓ simulation_range=$simulation_range"
     
     echo ""
-    log_warning "⚠️  Experiment may take 10-20 minutes depending on simulation range"
-    echo ""
     
     # Convert methods string to JSON array
     local methods_json=$(echo "[\"$(echo "$methods_str" | sed 's/,/", "/g')\"]")
@@ -662,11 +665,14 @@ run_unified_experiment() {
     echo "⏱️  Please wait - running unified experiment..."
     echo ""
     
+    # Add timeout handling for large experiments (macOS compatible)
     /usr/local/bin/aws lambda invoke \
         --function-name rideshare-experiment-runner \
         --payload "$payload" \
         --region $REGION \
         --cli-binary-format raw-in-base64-out \
+        --cli-read-timeout 900 \
+        --cli-connect-timeout 60 \
         response.json
     
     local status_code=$?
@@ -685,11 +691,28 @@ run_unified_experiment() {
             log_result "🏆 Best Method: $best_method"
             
             echo ""
-            log_info "📄 Analysis Command:"
-            echo "  python local-manager/results_manager.py analyze $experiment_id"
+            log_info "🔍 Auto-analyzing experiment results..."
+            python local-manager/results_manager.py analyze "$experiment_id" | cat
         fi
     else
-        log_error "Unified experiment failed"
+        log_error "Unified experiment failed with status code: $status_code"
+        
+        # Check if response file exists and show error details
+        if [[ -f response.json ]]; then
+            echo ""
+            log_info "Error details:"
+            
+            # Check for timeout indicators in response
+            local error_message=$(cat response.json | jq -r '.errorMessage // ""' 2>/dev/null || echo "")
+            if [[ "$error_message" == *"timed out"* ]] || [[ "$error_message" == *"timeout"* ]] || [[ "$error_message" == *"Task timed out"* ]]; then
+                log_error "⏰ Lambda function timed out - experiment too large for current setup"
+            fi
+            
+            cat response.json | jq . 2>/dev/null || cat response.json
+        else
+            log_warning "No response file found - possible network timeout"
+            log_info "💡 Try with smaller parameters or check network connection"
+        fi
     fi
 }
 

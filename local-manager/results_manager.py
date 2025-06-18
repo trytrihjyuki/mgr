@@ -234,17 +234,35 @@ class ExperimentResultsManager:
     def _find_experiment_file(self, experiment_id: str) -> Optional[str]:
         """Find experiment file using S3 list operations"""
         
-        # Search in partitioned structure
+        # Search in partitioned structure (new unified format)
         try:
-            # Try to list all experiment files and find matching one
-            prefixes_to_search = [
+            # Extract info from unified experiment ID format
+            # Format: unified_green_manhattan_2019_10_20250618_204257 or 
+            # Legacy: rideshare_green_2019_10_hikima_pl_20250618_204257
+            
+            # Try to extract vehicle type and timestamp from experiment ID
+            vehicle_types = ['green', 'yellow', 'fhv']
+            eval_types = ['pl', 'sigmoid']
+            years = list(range(2015, 2025))
+            
+            # New unified format prefixes 
+            prefixes_to_search = []
+            
+            # Add unified experiment prefixes (new format)
+            for vehicle_type in vehicle_types:
+                for eval_type in eval_types:
+                    for year in years:
+                        prefixes_to_search.append(f"experiments/rideshare/type={vehicle_type}/eval={eval_type}/year={year}/")
+            
+            # Add legacy prefixes
+            prefixes_to_search.extend([
                 "experiments/rideshare/type=green/",
                 "experiments/rideshare/type=yellow/", 
                 "experiments/rideshare/type=fhv/",
                 "experiments/results/rideshare/pl/",
                 "experiments/results/rideshare/sigmoid/",
                 "experiments/results/rideshare/"
-            ]
+            ])
             
             for prefix in prefixes_to_search:
                 try:
@@ -258,12 +276,26 @@ class ExperimentResultsManager:
                         filename = Path(key).stem
                         
                         # Check if this file matches our experiment ID
+                        # New unified format: unified_green_manhattan_2019_10_20250618_204257
+                        # File: unified_20250618_204257.json -> match on timestamp part
+                        if experiment_id.startswith('unified_'):
+                            # Extract timestamp from experiment ID
+                            parts = experiment_id.split('_')
+                            if len(parts) >= 6:  # unified_green_manhattan_2019_10_timestamp
+                                timestamp = '_'.join(parts[-2:])  # Last two parts = date_time
+                                if timestamp in filename:
+                                    logger.info(f"Found unified experiment: {key}")
+                                    return key
+                        
+                        # Legacy format and exact matches
                         if (experiment_id in filename or 
                             filename.replace('_results', '') == experiment_id or
                             filename == experiment_id):
+                            logger.info(f"Found legacy experiment: {key}")
                             return key
                             
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Error searching prefix {prefix}: {e}")
                     continue
             
         except Exception as e:
@@ -346,6 +378,123 @@ Data Period: {params.get('year', 'Unknown')}/{params.get('month', 'Unknown'):02d
     • Average Supply/Demand Ratio: {avg_supply_demand:.3f}
     • Standard Deviation (Match Rate): {pd.Series([s['match_rate'] for s in scenarios]).std():.3f}
 """
+        
+        return report
+    
+    def analyze_unified_experiment(self, experiment_data: Dict[str, Any]) -> str:
+        """Analyze a unified rideshare experiment with multiple methods."""
+        exp_id = experiment_data.get('experiment_id', 'Unknown')
+        status = experiment_data.get('status', 'Unknown')
+        
+        if status != 'completed':
+            return f"❌ Experiment {exp_id} - Status: {status}"
+        
+        # Extract parameters
+        original_setup = experiment_data.get('original_setup', {})
+        experiment_params = experiment_data.get('experiment_parameters', {})
+        method_results = experiment_data.get('method_results', {})
+        performance_ranking = experiment_data.get('performance_ranking', [])
+        
+        place = original_setup.get('place', 'Unknown')
+        days = original_setup.get('days', [])
+        time_interval = original_setup.get('time_interval', 0)
+        time_unit = original_setup.get('time_unit', 's')
+        simulation_range = original_setup.get('simulation_range', 0)
+        
+        vehicle_type = experiment_params.get('vehicle_type', 'Unknown')
+        year = experiment_params.get('year', 'Unknown')
+        months = experiment_params.get('months', [])
+        methods = experiment_params.get('methods', [])
+        acceptance_function = experiment_params.get('acceptance_function', 'Unknown')
+        num_eval = experiment_params.get('num_eval', 100)
+        
+        report = f"""
+🧪 Unified Rideshare Experiment Analysis: {exp_id}
+{'='*80}
+Status: ✅ COMPLETED
+Execution Time: {experiment_data.get('execution_time_seconds', 0):.2f} seconds
+Timestamp: {experiment_data.get('timestamp', 'Unknown')}
+
+📋 Original Setup (experiment_PL.py format):
+  • Place: {place}
+  • Days: {', '.join(map(str, days))}
+  • Time Interval: {time_interval}{time_unit}
+  • Simulation Range: {simulation_range} scenarios
+
+📊 Extended Parameters:
+  • Vehicle Type: {vehicle_type.upper()}
+  • Year: {year}
+  • Months: {', '.join(map(str, months))}
+  • Methods: {', '.join(methods)}
+  • Acceptance Function: {acceptance_function}
+  • Monte Carlo Evaluations: {num_eval}
+
+🏆 Performance Ranking:
+"""
+        
+        # Performance ranking
+        if performance_ranking:
+            for i, method_data in enumerate(performance_ranking, 1):
+                method = method_data.get('method', 'Unknown')
+                score = method_data.get('avg_objective_value', 0)
+                report += f"  {i}. {method.upper()}: {score:.2f}\n"
+        else:
+            report += "  No ranking available\n"
+        
+        report += "\n📈 Method Performance Summary:\n"
+        
+        # Method comparison table
+        if method_results:
+            comparison_data = []
+            for method, results in method_results.items():
+                summary = results.get('overall_summary', {})
+                exec_time = results.get('method_execution_time', 0)
+                
+                comparison_data.append({
+                    'Method': method.upper(),
+                    'Avg Objective': f"{summary.get('avg_objective_value', 0):,.2f}",
+                    'Avg Revenue': f"{summary.get('avg_revenue', 0):,.2f}",
+                    'Total Matches': f"{summary.get('total_matches', 0):,.0f}",
+                    'Success Rate': f"{summary.get('success_rate', 0):.2%}",
+                    'Exec Time': f"{exec_time:.3f}s"
+                })
+            
+            df = pd.DataFrame(comparison_data)
+            report += df.to_string(index=False) + "\n\n"
+        
+        # Detailed method analysis
+        report += "🔍 Detailed Method Analysis:\n"
+        for method, results in method_results.items():
+            summary = results.get('overall_summary', {})
+            monthly_data = results.get('monthly_aggregates', {})
+            
+            total_simulations = summary.get('total_simulations', 0)
+            avg_computation_time = summary.get('avg_computation_time', 0)
+            total_computation_time = summary.get('total_computation_time', 0)
+            method_execution_time = results.get('method_execution_time', 0)
+            
+            report += f"""
+  {method.upper()} Method:
+    • Total Simulations: {total_simulations}
+    • Average Objective Value: {summary.get('avg_objective_value', 0):,.2f}
+    • Standard Deviation: {summary.get('std_objective_value', 0):.3f}
+    • Range: {summary.get('min_objective_value', 0):.2f} - {summary.get('max_objective_value', 0):.2f}
+    • Average Computation Time: {avg_computation_time:.4f}s per scenario
+    • Total Computation Time: {total_computation_time:.3f}s
+    • Method Execution Time: {method_execution_time:.3f}s
+    • Months Analyzed: {len(monthly_data)}
+"""
+        
+        # Monthly breakdown for multi-month experiments
+        monthly_summaries = experiment_data.get('monthly_summaries', {})
+        if monthly_summaries:
+            report += "\n📅 Monthly Performance Summary:\n"
+            for month_key, month_data in monthly_summaries.items():
+                report += f"\n  {month_key}:\n"
+                for method, month_summary in month_data.items():
+                    avg_obj = month_summary.get('avg_objective_value', 0)
+                    total_sims = month_summary.get('total_simulations', 0)
+                    report += f"    • {method.upper()}: {avg_obj:.2f} (from {total_sims} simulations)\n"
         
         return report
     
@@ -464,6 +613,10 @@ Status: ❌ FAILED
 Error: {experiment_data.get('error', 'Unknown error')}
 Timestamp: {experiment_data.get('timestamp', 'Unknown')}
 """
+        
+        # Handle unified rideshare experiments (new format)
+        if exp_type == 'unified_rideshare':
+            return self.analyze_unified_experiment(experiment_data)
         
         # Handle comparative experiments
         if exp_type == 'rideshare_comparative':
