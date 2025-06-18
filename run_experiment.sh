@@ -48,6 +48,7 @@ show_help() {
     echo -e "${YELLOW}Data Commands:${NC}"
     echo "  download-single <vehicle_type> <year> <month> [limit]"
     echo "  download-bulk <year> <start_month> <end_month> [vehicle_types]"
+    echo "  check-availability <vehicle_type> <year> <month>"
     echo "  list-data"
     echo ""
     echo -e "${YELLOW}Experiment Commands:${NC}"
@@ -79,6 +80,7 @@ show_help() {
     echo "  💰 base_price: Base trip price (default: 5.875)"
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
+    echo "  $0 check-availability yellow 2017 8    # Check if data is available"
     echo "  $0 download-single green 2019 3"
     echo "  $0 download-bulk 2019 1 3 green,yellow"
     echo "  $0 run-comparative green 2019 3 PL 5"
@@ -617,14 +619,21 @@ main() {
                 log_error "Usage: $0 download-single <vehicle_type> <year> <month> [limit]"
                 return 1
             fi
-            download_single "${@:2}"
+            download_single_enhanced "${@:2}"
             ;;
         "download-bulk")
             if [[ $# -lt 4 ]]; then
                 log_error "Usage: $0 download-bulk <year> <start_month> <end_month> [vehicle_types]"
                 return 1
             fi
-            download_bulk "${@:2}"
+            download_bulk_enhanced "${@:2}"
+            ;;
+        "check-availability")
+            if [[ $# -lt 4 ]]; then
+                log_error "Usage: $0 check-availability <vehicle_type> <year> <month>"
+                return 1
+            fi
+            check_data_availability "${@:2}"
             ;;
         "list-data")
             list_data "${@:2}"
@@ -959,6 +968,96 @@ compare_methods() {
     log_progress "Experiment 2: $exp_id_2"
     
     python local-manager/results_manager.py compare "$exp_id_1" "$exp_id_2"
+}
+
+# Add new command function for checking data availability
+check_data_availability() {
+    local vehicle_type="$1"
+    local year="$2"
+    local month="$3"
+    
+    log_info "🔍 Checking data availability for $vehicle_type $year-$(printf "%02d" $month)"
+    
+    # Check current S3 data
+    local s3_key="datasets/$vehicle_type/year=$year/month=$(printf "%02d" $month)/"
+    
+    if /usr/local/bin/aws s3 ls "s3://magisterka/$s3_key" --region eu-north-1 &>/dev/null; then
+        log_success "✅ Data already available in S3"
+        return 0
+    fi
+    
+    # Check known availability patterns
+    if [ "$year" -lt 2018 ]; then
+        if [ "$vehicle_type" = "fhv" ]; then
+            log_error "❌ FHV data before 2018 is not available"
+            log_warning "💡 Suggestion: Use years 2018-2023 for FHV data"
+            return 1
+        elif [ "$vehicle_type" = "yellow" ] && [ "$month" -ge 5 ]; then
+            log_error "❌ Yellow taxi 2017 May-Dec not available"
+            log_warning "💡 Suggestion: Use years 2018-2023 for complete Yellow taxi coverage"
+            return 1
+        fi
+    fi
+    
+    log_warning "⚠️ Data not in S3, will attempt download"
+    return 0
+}
+
+# Add availability check to download functions
+download_single_enhanced() {
+    local vehicle_type="$1"
+    local year="$2" 
+    local month="$3"
+    
+    # Check availability first
+    if ! check_data_availability "$vehicle_type" "$year" "$month"; then
+        log_error "Data availability check failed"
+        return 1
+    fi
+    
+    # Proceed with original download logic
+    download_single "$vehicle_type" "$year" "$month"
+}
+
+# Enhanced bulk download with pre-checking
+download_bulk_enhanced() {
+    local start_year="$1"
+    local start_month="$2"
+    local end_month="$3"
+    local vehicle_types="$4"
+    
+    log_info "🔍 Pre-checking data availability..."
+    
+    IFS=',' read -ra TYPES <<< "$vehicle_types"
+    local total_requests=0
+    local likely_failures=0
+    
+    for vehicle_type in "${TYPES[@]}"; do
+        vehicle_type=$(echo "$vehicle_type" | tr '[:upper:]' '[:lower:]')
+        
+        for month in $(seq "$start_month" "$end_month"); do
+            total_requests=$((total_requests + 1))
+            
+            if ! check_data_availability "$vehicle_type" "$start_year" "$month" 2>/dev/null; then
+                likely_failures=$((likely_failures + 1))
+            fi
+        done
+    done
+    
+    if [ "$likely_failures" -gt 0 ]; then
+        log_warning "⚠️ Pre-check indicates $likely_failures/$total_requests requests may fail"
+        log_warning "💡 Consider using years 2018-2023 for better data coverage"
+        
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Operation cancelled"
+            return 1
+        fi
+    fi
+    
+    # Proceed with original bulk download
+    download_bulk "$start_year" "$start_month" "$end_month" "$vehicle_types"
 }
 
 # Run main function with all arguments

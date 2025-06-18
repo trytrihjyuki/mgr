@@ -92,46 +92,149 @@ def lambda_handler(event, context):
             }, default=str)
         }
 
+def check_data_availability(vehicle_type, year, month):
+    """
+    Check if data is likely to be available based on known patterns
+    """
+    availability_info = {
+        "available": True,
+        "confidence": "high",
+        "alternatives": [],
+        "notes": []
+    }
+    
+    # Known data availability patterns
+    if year < 2018:
+        if vehicle_type == "fhv":
+            availability_info["available"] = False
+            availability_info["confidence"] = "low"
+            availability_info["alternatives"].append("Use 2018-2023 for FHV data")
+            availability_info["notes"].append("FHV data before 2018 is not available on CloudFront")
+        
+        elif vehicle_type == "yellow" and month >= 5:
+            availability_info["available"] = False
+            availability_info["confidence"] = "low"
+            availability_info["alternatives"].append("Use 2018-2023 for complete Yellow taxi coverage")
+            availability_info["notes"].append("Yellow taxi 2017 May-Dec not available on CloudFront")
+    
+    elif year >= 2024:
+        availability_info["confidence"] = "medium"
+        availability_info["notes"].append("Recent data may have delayed availability")
+    
+    # Suggest optimal data ranges
+    if not availability_info["available"]:
+        if vehicle_type == "green":
+            availability_info["alternatives"].append("Green taxi: 2017-2023 available")
+        elif vehicle_type == "yellow":
+            availability_info["alternatives"].append("Yellow taxi: 2018-2023 recommended")
+        elif vehicle_type == "fhv":
+            availability_info["alternatives"].append("FHV: 2018-2023 available")
+    
+    return availability_info
+
 def download_single_dataset(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Download a single dataset with multi-source fallback."""
+    """Download a single dataset with enhanced availability checking"""
     vehicle_type = event.get('vehicle_type', 'green')
     year = event.get('year', 2019)
     month = event.get('month', 3)
     limit = event.get('limit')
     
-    logger.info(f"🎯 TARGET: {vehicle_type.upper()} taxi data for {year}-{month:02d}")
-    if limit:
-        logger.info(f"📊 LIMIT: {limit:,} records")
+    logger.info(f"📥 Starting download: {vehicle_type} {year}-{month:02d}")
     
-    # Try multiple data sources
-    sources_tried = []
-    last_error = None
+    # Check data availability first
+    availability = check_data_availability(vehicle_type, year, month)
     
-    for source_key, source_config in sorted(DATA_SOURCES.items(), key=lambda x: x[1]['priority']):
-        logger.info(f"🔄 TRYING: {source_config['name']}")
-        sources_tried.append(source_config['name'])
+    if not availability["available"]:
+        logger.warning(f"⚠️ Data availability issue detected for {vehicle_type} {year}-{month:02d}")
+        for note in availability["notes"]:
+            logger.warning(f"   📝 {note}")
+        for alt in availability["alternatives"]:
+            logger.info(f"   💡 Suggestion: {alt}")
+    
+    # Generate S3 key
+    s3_key = f"datasets/{vehicle_type}/year={year}/month={month:02d}/{vehicle_type}_tripdata_{year}-{month:02d}.parquet"
+    
+    # Check if already exists
+    try:
+        s3_client.head_object(Bucket=BUCKET_NAME, Key=s3_key)
+        logger.info(f"✅ File already exists in S3: {s3_key}")
         
+        # Get file info
+        response = s3_client.head_object(Bucket=BUCKET_NAME, Key=s3_key)
+        return create_success_response(
+            vehicle_type, year, month, s3_key,
+            response['ContentLength'], "already_exists"
+        )
+    except:
+        pass  # File doesn't exist, proceed with download
+    
+    download_start = time.time()
+    
+    # Try each data source in order
+    last_error = None
+    for source_name, source_config in DATA_SOURCES.items():
         try:
-            result = download_from_source(
-                source_key, source_config, vehicle_type, year, month, limit
+            logger.info(f"🌐 Trying {source_config['name']}...")
+            
+            url = source_config['url_template'].format(
+                vehicle_type=vehicle_type,
+                year=year,
+                month=month
             )
-            if result['status'] == 'success':
-                result['sources_tried'] = sources_tried
-                return result
+            
+            # Make request with timeout
+            response = requests.get(url, stream=True, timeout=TIMEOUT)
+            
+            if response.status_code == 200:
+                # Stream to S3
+                upload_response = s3_client.put_object(
+                    Bucket=BUCKET_NAME,
+                    Key=s3_key,
+                    Body=response.content,
+                    ContentType='application/octet-stream'
+                )
+                
+                download_time = time.time() - download_start
+                file_size = len(response.content)
+                
+                logger.info(f"✅ Successfully downloaded {file_size:,} bytes from {source_config['name']}")
+                
+                return create_success_response(
+                    vehicle_type, year, month, s3_key, file_size, 
+                    source_config['name'], download_time, url
+                )
+            else:
+                error_msg = f"HTTP {response.status_code}"
+                logger.warning(f"❌ {source_config['name']}: {error_msg}")
+                last_error = error_msg
                 
         except Exception as e:
-            last_error = str(e)
-            logger.warning(f"⚠️  FAILED: {source_config['name']} - {str(e)}")
+            error_msg = str(e)
+            logger.warning(f"❌ {source_config['name']}: {error_msg}")
+            last_error = error_msg
             continue
     
     # All sources failed
+    logger.error(f"💥 All data sources failed for {vehicle_type} {year}-{month:02d}")
+    
+    # Provide helpful suggestions
+    availability = check_data_availability(vehicle_type, year, month)
+    suggestions = []
+    
+    if not availability["available"]:
+        suggestions.extend(availability["alternatives"])
+    else:
+        suggestions.append(f"Try a different month or year")
+        suggestions.append(f"Check NYC TLC website for data availability")
+    
     return {
-        'status': 'error',
-        'error': f"All data sources failed. Last error: {last_error}",
-        'sources_tried': sources_tried,
-        'vehicle_type': vehicle_type,
-        'year': year,
-        'month': month
+        "status": "error",
+        "vehicle_type": vehicle_type,
+        "year": year,
+        "month": month,
+        "error": f"All data sources failed. Last error: {last_error}",
+        "suggestions": suggestions,
+        "availability_info": availability
     }
 
 def download_bulk_datasets(event: Dict[str, Any]) -> Dict[str, Any]:
