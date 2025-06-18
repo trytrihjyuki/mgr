@@ -53,7 +53,7 @@ class ExperimentResultsManager:
         Returns:
             List of experiment metadata
         """
-        # New partitioned structure: experiments/rideshare/type=*/eval=*/year=*/month=*/
+        # New partitioned structure: experiments/type=*/eval=*/year=*/month=*/ (rideshare/ removed)
         prefixes = []
         
         # Build prefixes for partitioned structure
@@ -181,13 +181,13 @@ class ExperimentResultsManager:
         # Build possible S3 key patterns for both old and new structures
         possible_keys = []
         
-        # New partitioned structure patterns
+        # Partitioned structure patterns (try common combinations)
         for vehicle_type in ['green', 'yellow', 'fhv']:
             for eval_type in ['pl', 'sigmoid']:
                 for year in range(2019, 2025):
                     for month in range(1, 13):
-                        # Pattern: experiments/rideshare/type=green/eval=pl/year=2019/month=03/run_20250617_220136.json
-                        possible_keys.append(f"experiments/rideshare/type={vehicle_type}/eval={eval_type}/year={year}/month={month:02d}/{experiment_id}.json")
+                        # Pattern: experiments/type=green/eval=pl/year=2019/month=03/run_20250617_220136.json
+                        possible_keys.append(f"experiments/type={vehicle_type}/eval={eval_type}/year={year}/month={month:02d}/{experiment_id}.json")
         
         # Legacy structure patterns
         legacy_patterns = [
@@ -252,9 +252,9 @@ class ExperimentResultsManager:
             for vehicle_type in vehicle_types:
                 for eval_type in eval_types:
                     for year in years:
-                        prefixes_to_search.append(f"experiments/rideshare/type={vehicle_type}/eval={eval_type}/year={year}/")
+                        prefixes_to_search.append(f"experiments/type={vehicle_type}/eval={eval_type}/year={year}/")
             
-            # Add legacy prefixes
+            # Add legacy prefixes for backwards compatibility
             prefixes_to_search.extend([
                 "experiments/rideshare/type=green/",
                 "experiments/rideshare/type=yellow/", 
@@ -408,7 +408,7 @@ Data Period: {params.get('year', 'Unknown')}/{params.get('month', 'Unknown'):02d
         acceptance_function = experiment_params.get('acceptance_function', 'Unknown')
         num_eval = experiment_params.get('num_eval', 100)
         
-        s3_key = experiment_data.get('s3_key', f"experiments/rideshare/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/unified_{exp_id.split('_')[-2]}_{exp_id.split('_')[-1]}.json")
+        s3_key = experiment_data.get('s3_key', f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/unified_{exp_id.split('_')[-2]}_{exp_id.split('_')[-1]}.json")
         s3_url = f"s3://{self.bucket_name}/{s3_key}"
         
         report = f"""

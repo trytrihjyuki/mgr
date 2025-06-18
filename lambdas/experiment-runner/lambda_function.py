@@ -110,8 +110,9 @@ def lambda_handler(event, context):
             "dataset_scope_percentage": round(min(100.0, ((runner.simulation_range * 5) / (len(days) * 24 * 60)) * 100), 1)
         }
         
-        # Upload to S3
-        s3_key = f"experiments/rideshare/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/unified_{timestamp}.json"
+        # Upload to S3 (single month only - multi-month not supported)
+        month = months[0]  # Use first month since multi-month not supported
+        s3_key = f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/unified_{timestamp}.json"
         upload_success = upload_results_to_s3(results, s3_key)
         
         return {
@@ -1143,7 +1144,7 @@ class UnifiedExperimentRunner:
 
 def build_s3_path(vehicle_type, acceptance_function, year, month, experiment_id):
     """Build properly partitioned S3 path without redundant /results"""
-    return f"experiments/rideshare/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    return f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
 def create_clean_response(results, s3_key, upload_success):
     """Create clean response matching README format"""
