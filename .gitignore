@@ -1,4 +1,6 @@
 # Bipartite Matching AWS Project - .gitignore
+local-cache/
+response*
 
 # ===== Python =====
 # Byte-compiled / optimized / DLL files

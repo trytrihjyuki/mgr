@@ -29,51 +29,80 @@ cp lambda_function.py package/
 # Create deployment zip
 echo "🗜️  Creating deployment zip..."
 cd package
-zip -r ../lambda-deployment.zip .
+zip -r ../lambda-deployment.zip . -q
 cd ..
 
-# Deploy or update Lambda function
+echo "📊 Package size: $(ls -lh lambda-deployment.zip | awk '{print $5}')"
+
+# Check if function exists
+echo "🔍 Checking if Lambda function exists..."
 if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION > /dev/null 2>&1; then
-    echo "📝 Updating existing Lambda function..."
+    echo "🔄 Function exists - updating code and configuration..."
+    
+    # Update function code
     aws lambda update-function-code \
         --function-name $FUNCTION_NAME \
         --zip-file fileb://lambda-deployment.zip \
-        --region $REGION > /dev/null
+        --region $REGION
+    
+    # Update function configuration for bulk operations
+    echo "⚙️  Updating function configuration for bulk operations..."
+    aws lambda update-function-configuration \
+        --function-name $FUNCTION_NAME \
+        --timeout 900 \
+        --memory-size 512 \
+        --region $REGION \
+        --environment Variables="{BUCKET_NAME=$BUCKET_NAME}" \
+        --description "Enhanced NYC taxi data ingestion with multiple data sources and bulk download support"
+    
+    echo "✅ Function updated successfully!"
 else
-    echo "🆕 Creating new Lambda function..."
-    # Get AWS Account ID
-    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region $REGION)
+    echo "🆕 Function doesn't exist - creating new function..."
+    
+    # Create the function with appropriate settings for bulk operations
     aws lambda create-function \
         --function-name $FUNCTION_NAME \
         --runtime python3.9 \
-        --role arn:aws:iam::${ACCOUNT_ID}:role/lambda-execution-role \
+        --role arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/lambda-execution-role \
         --handler lambda_function.lambda_handler \
         --zip-file fileb://lambda-deployment.zip \
         --timeout 900 \
-        --memory-size 1024 \
-        --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
-        --region $REGION > /dev/null
+        --memory-size 512 \
+        --region $REGION \
+        --environment Variables="{BUCKET_NAME=$BUCKET_NAME}" \
+        --description "Enhanced NYC taxi data ingestion with multiple data sources and bulk download support"
+    
+    echo "✅ Function created successfully!"
 fi
 
-# Update environment variables and configuration
-echo "🔧 Setting environment variables and configuration..."
-aws lambda update-function-configuration \
-    --function-name $FUNCTION_NAME \
-    --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
-    --timeout 900 \
-    --memory-size 1024 \
-    --region $REGION > /dev/null
+# Wait for function to be active
+echo "⏳ Waiting for function to be ready..."
+aws lambda wait function-active --function-name $FUNCTION_NAME --region $REGION
 
-# Cleanup
+# Get function info
+echo "📋 Function Information:"
+aws lambda get-function-configuration --function-name $FUNCTION_NAME --region $REGION | jq '{
+    FunctionName,
+    Runtime,
+    Timeout,
+    MemorySize,
+    LastUpdateStatus,
+    State
+}'
+
+echo ""
+echo "🎉 Deployment completed successfully!"
+echo "📝 Function Details:"
+echo "   • Name: $FUNCTION_NAME"
+echo "   • Timeout: 15 minutes (900 seconds)"
+echo "   • Memory: 512 MB"
+echo "   • Region: $REGION"
+echo "   • S3 Bucket: $BUCKET_NAME"
+echo ""
+echo "⚡ Ready for bulk operations!"
+
+# Clean up
 rm -rf package lambda-deployment.zip
-
-echo "✅ Lambda function deployed successfully!"
-echo "📊 Function Details:"
-echo "  Name: $FUNCTION_NAME"
-echo "  Region: $REGION"
-echo "  Runtime: python3.9"
-echo "  Memory: 1024MB"
-echo "  Timeout: 900s"
 
 # Test the function
 echo ""

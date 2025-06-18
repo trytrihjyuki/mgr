@@ -56,11 +56,27 @@ show_help() {
     echo "  run-benchmark <vehicle_type> <year> <month> [scenarios]"
     echo "  test-window-time <vehicle_type> <year> <month> <method> <window_seconds>"
     echo "  test-acceptance-functions <vehicle_type> <year> <month> <method>"
+    echo "  test-meta-params <vehicle_type> <year> <month> <method>"
+    echo ""
+    echo -e "${YELLOW}Advanced Experiment Commands:${NC}"
+    echo "  run-with-params <vehicle_type> <year> <month> <method> [params_json]"
+    echo "  parameter-sweep <vehicle_type> <year> <month> <method>"
     echo ""
     echo -e "${YELLOW}Analysis Commands:${NC}"
     echo "  list-experiments [days]"
     echo "  show-experiment <experiment_id>"
     echo "  analyze <experiment_id>"
+    echo "  compare-methods <experiment_id_1> <experiment_id_2>"
+    echo ""
+    echo -e "${YELLOW}Parameter Explanations:${NC}"
+    echo "  📊 simulation_range: Number of scenarios per method (default: 3-5)"
+    echo "  ⏰ window_time: Matching time window in seconds (default: 300s)"
+    echo "  🔄 retry_count: Number of retry attempts (default: 3)"
+    echo "  🎯 num_eval: Monte Carlo evaluations per scenario (default: 100)"
+    echo "  ⏱️  time_interval: Time granularity in minutes (default: 5)"
+    echo "  🚖 alpha: Algorithm parameter for w_ij calculation (default: 18)"
+    echo "  🚗 s_taxi: Taxi speed parameter (default: 25)"
+    echo "  💰 base_price: Base trip price (default: 5.875)"
     echo ""
     echo -e "${YELLOW}Examples:${NC}"
     echo "  $0 download-single green 2019 3"
@@ -68,6 +84,7 @@ show_help() {
     echo "  $0 run-comparative green 2019 3 PL 5"
     echo "  $0 test-window-time green 2019 3 linear_program 600"
     echo "  $0 analyze run_20241217_123456"
+    echo "  $0 parameter-sweep green 2019 3 proposed"
     echo ""
     echo -e "${YELLOW}Available Methods:${NC} proposed, maps, linucb, linear_program"
     echo -e "${YELLOW}Available Vehicle Types:${NC} green, yellow, fhv"
@@ -85,75 +102,127 @@ download_single() {
     log_progress "Target: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi data for $year-$(printf %02d $month)"
     
     if [[ -n "$limit" ]]; then
-        log_info "Record limit: $(printf "%'d" $limit)"
+        log_progress "Record limit: $limit"
     else
-        log_info "Record limit: No limit (full dataset)"
+        log_progress "Record limit: All records (no limit)"
     fi
     
-    local payload="{\\\"action\\\":\\\"download_single\\\",\\\"vehicle_type\\\":\\\"$vehicle_type\\\",\\\"year\\\":$year,\\\"month\\\":$month"
+    local payload="{\"action\":\"download_single\",\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month"
     if [[ -n "$limit" ]]; then
-        payload="$payload,\\\"limit\\\":$limit"
+        payload="$payload,\"limit\":$limit"
     fi
     payload="$payload}"
     
-    log_progress "Invoking data ingestion Lambda..."
-    log_info "Payload: $payload"
+    log_progress "Invoking data ingestion Lambda (waiting for completion)..."
+    echo "⏱️  Please wait - this may take a few minutes..."
+    echo ""
     
+    # Remove output redirection to see real-time progress and errors
     /usr/local/bin/aws lambda invoke \
         --function-name nyc-data-ingestion \
         --payload "$payload" \
         --region $REGION \
         --cli-binary-format raw-in-base64-out \
-        response.json > /dev/null 2>&1
-
-    local status_code=$?
+        response.json
     
-    if [[ $status_code -eq 0 ]]; then
-        log_success "Lambda invocation completed"
+    local status_code=$?
+    echo ""
+    
+    # Check AWS CLI invocation status
+    if [[ $status_code -ne 0 ]]; then
+        log_error "AWS Lambda invocation failed with exit code: $status_code"
+        log_error "This could indicate network issues, authentication problems, or Lambda service errors"
+        return 1
+    fi
+    
+    # Check if response file was created
+    if [[ ! -f response.json ]]; then
+        log_error "No response file generated - Lambda invocation may have failed"
+        return 1
+    fi
+    
+    log_success "Lambda invocation completed - processing results..."
+    
+    # Parse and validate response
+    local response_body
+    local lambda_status_code
+    local lambda_error_type
+    local lambda_error_message
+    
+    # Check for Lambda execution errors first
+    lambda_error_type=$(cat response.json | jq -r '.errorType // ""' 2>/dev/null)
+    lambda_error_message=$(cat response.json | jq -r '.errorMessage // ""' 2>/dev/null)
+    
+    if [[ -n "$lambda_error_type" && "$lambda_error_type" != "" ]]; then
+        log_error "Lambda function execution failed!"
+        log_error "Error Type: $lambda_error_type"
+        log_error "Error Message: $lambda_error_message"
+        echo ""
+        log_info "Full error response:"
+        cat response.json | jq . 2>/dev/null || cat response.json
+        return 1
+    fi
+    
+    # Check HTTP status code
+    lambda_status_code=$(cat response.json | jq -r '.statusCode // ""' 2>/dev/null)
+    if [[ "$lambda_status_code" != "200" ]]; then
+        log_error "Lambda function returned non-200 status code: $lambda_status_code"
+        echo ""
+        log_info "Full response:"
+        cat response.json | jq . 2>/dev/null || cat response.json
+        return 1
+    fi
+    
+    # Parse successful response body
+    response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
+    
+    if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+        local status
+        local s3_key
+        local size_bytes
+        local records_processed
+        local data_source
         
-        # Parse and display response
-        if [[ -f response.json ]]; then
-            log_progress "Parsing Lambda response..."
+        status=$(echo "$response_body" | jq -r '.status // ""' 2>/dev/null)
+        s3_key=$(echo "$response_body" | jq -r '.s3_key // ""' 2>/dev/null)
+        size_bytes=$(echo "$response_body" | jq -r '.size_bytes // 0' 2>/dev/null)
+        records_processed=$(echo "$response_body" | jq -r '.records_processed // 0' 2>/dev/null)
+        data_source=$(echo "$response_body" | jq -r '.data_source // ""' 2>/dev/null)
+        
+        if [[ "$status" == "success" ]]; then
+            log_success "🎉 Single download completed successfully!"
+            log_result "📊 DOWNLOAD SUMMARY:"
+            log_result "  📁 S3 Location: s3://$BUCKET_NAME/$s3_key"
+            log_result "  📦 File Size: $(( size_bytes / 1024 / 1024 )) MB ($(printf "%'d" $size_bytes) bytes)"
+            log_result "  📊 Records: $(printf "%'d" $records_processed)"
+            log_result "  🌐 Data Source: $data_source"
             
-            # Extract status and body
-            local response_body
-            response_body=$(cat response.json | jq -r '.body' 2>/dev/null)
-            
-            if [[ "$response_body" != "null" && -n "$response_body" ]]; then
-                # Parse the nested JSON body
-                local status
-                local size_mb
-                local s3_key
-                local error_msg
-                
-                status=$(echo "$response_body" | jq -r '.status // "unknown"' 2>/dev/null)
-                size_mb=$(echo "$response_body" | jq -r '.size_mb // "unknown"' 2>/dev/null)
-                s3_key=$(echo "$response_body" | jq -r '.s3_key // "unknown"' 2>/dev/null)
-                error_msg=$(echo "$response_body" | jq -r '.error // ""' 2>/dev/null)
-                
-                if [[ "$status" == "success" ]]; then
-                    log_success "Data download completed successfully!"
-                    log_result "File size: ${size_mb}MB"
-                    log_result "S3 location: s3://magisterka/$s3_key"
-                else
-                    log_error "Data download failed"
-                    if [[ -n "$error_msg" && "$error_msg" != "null" ]]; then
-                        log_error "Error: $error_msg"
-                    fi
-                fi
+            # Verify upload to S3
+            log_progress "Verifying S3 upload..."
+            if /usr/local/bin/aws s3 ls "s3://$BUCKET_NAME/$s3_key" --region $REGION > /dev/null 2>&1; then
+                log_success "✅ File verified in S3"
             else
-                log_warning "Could not parse Lambda response body"
+                log_warning "⚠️  Could not verify file in S3 (may be access issue)"
             fi
-            
-            # Show raw response for debugging
-            echo ""
-            log_info "Raw Lambda Response:"
-            cat response.json | jq . 2>/dev/null || cat response.json
         else
-            log_error "Response file not found"
+            log_error "Download failed with status: $status"
+            
+            # Extract error details if available
+            local error_msg
+            error_msg=$(echo "$response_body" | jq -r '.error // "Unknown error"' 2>/dev/null)
+            log_error "Error details: $error_msg"
+            return 1
         fi
+        
+        echo ""
+        log_info "📄 Full Response:"
+        echo "$response_body" | jq . 2>/dev/null || echo "$response_body"
+        
     else
-        log_error "Lambda invocation failed with status code: $status_code"
+        log_error "Could not parse Lambda response body"
+        log_info "Raw response:"
+        cat response.json
+        return 1
     fi
 }
 
@@ -178,55 +247,119 @@ download_bulk() {
     total_datasets=$((num_types * (end_month - start_month + 1)))
     
     log_info "Total datasets to download: $total_datasets"
+    log_warning "Large bulk downloads may take 10-15 minutes to complete"
     
-    local payload="{\\\"action\\\":\\\"download_bulk\\\",\\\"vehicle_types\\\":$vehicle_types_json,\\\"year\\\":$year,\\\"start_month\\\":$start_month,\\\"end_month\\\":$end_month}"
+    local payload="{\"action\":\"download_bulk\",\"vehicle_types\":$vehicle_types_json,\"year\":$year,\"start_month\":$start_month,\"end_month\":$end_month}"
     
-    log_progress "Invoking bulk data ingestion Lambda..."
-    log_info "This may take several minutes for large date ranges..."
+    log_progress "Invoking bulk data ingestion Lambda (this will wait for completion)..."
+    echo "⏱️  Please wait - downloading $total_datasets datasets..."
+    echo ""
     
+    # Remove output redirection to see real-time progress and errors
     /usr/local/bin/aws lambda invoke \
         --function-name nyc-data-ingestion \
         --payload "$payload" \
         --region $REGION \
         --cli-binary-format raw-in-base64-out \
-        response.json > /dev/null 2>&1
-
-    local status_code=$?
+        response.json
     
-    if [[ $status_code -eq 0 ]]; then
-        log_success "Bulk Lambda invocation completed"
+    local status_code=$?
+    echo ""
+    
+    # Check AWS CLI invocation status
+    if [[ $status_code -ne 0 ]]; then
+        log_error "AWS Lambda invocation failed with exit code: $status_code"
+        log_error "This could indicate network issues, authentication problems, or Lambda service errors"
+        return 1
+    fi
+    
+    # Check if response file was created
+    if [[ ! -f response.json ]]; then
+        log_error "No response file generated - Lambda invocation may have failed"
+        return 1
+    fi
+    
+    log_success "Lambda invocation completed - processing results..."
+    
+    # Parse and validate response
+    local response_body
+    local lambda_status_code
+    local lambda_error_type
+    local lambda_error_message
+    
+    # Check for Lambda execution errors first
+    lambda_error_type=$(cat response.json | jq -r '.errorType // ""' 2>/dev/null)
+    lambda_error_message=$(cat response.json | jq -r '.errorMessage // ""' 2>/dev/null)
+    
+    if [[ -n "$lambda_error_type" && "$lambda_error_type" != "" ]]; then
+        log_error "Lambda function execution failed!"
+        log_error "Error Type: $lambda_error_type"
+        log_error "Error Message: $lambda_error_message"
+        echo ""
+        log_info "Full error response:"
+        cat response.json | jq . 2>/dev/null || cat response.json
+        return 1
+    fi
+    
+    # Check HTTP status code
+    lambda_status_code=$(cat response.json | jq -r '.statusCode // ""' 2>/dev/null)
+    if [[ "$lambda_status_code" != "200" ]]; then
+        log_error "Lambda function returned non-200 status code: $lambda_status_code"
+        echo ""
+        log_info "Full response:"
+        cat response.json | jq . 2>/dev/null || cat response.json
+        return 1
+    fi
+    
+    # Parse successful response body
+    response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
+    
+    if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+        local successful
+        local failed
+        local total
         
-        if [[ -f response.json ]]; then
-            log_progress "Parsing bulk download results..."
+        successful=$(echo "$response_body" | jq -r '.successful_downloads // 0' 2>/dev/null)
+        failed=$(echo "$response_body" | jq -r '.failed_downloads // 0' 2>/dev/null)
+        total=$(echo "$response_body" | jq -r '.total_downloads // 0' 2>/dev/null)
+        
+        log_success "Bulk download completed!"
+        log_result "📊 BULK DOWNLOAD SUMMARY:"
+        log_result "  📦 Total datasets: $total"
+        log_result "  ✅ Successful: $successful"
+        log_result "  ❌ Failed: $failed"
+        
+        # Check if any downloads failed
+        if [[ $failed -gt 0 ]]; then
+            log_warning "⚠️  $failed downloads failed - checking details..."
             
-            local response_body
-            response_body=$(cat response.json | jq -r '.body' 2>/dev/null)
+            # Extract and display failed download details
+            echo "$response_body" | jq -r '.results[] | select(.status == "error") | "❌ \(.vehicle_type) \(.year)-\(.month): \(.error)"' 2>/dev/null
             
-            if [[ "$response_body" != "null" && -n "$response_body" ]]; then
-                local successful
-                local failed
-                local total
-                
-                successful=$(echo "$response_body" | jq -r '.successful_downloads // 0' 2>/dev/null)
-                failed=$(echo "$response_body" | jq -r '.failed_downloads // 0' 2>/dev/null)
-                total=$(echo "$response_body" | jq -r '.total_downloads // 0' 2>/dev/null)
-                
-                log_result "Bulk Download Summary:"
-                log_result "  Total datasets: $total"
-                log_result "  Successful: $successful"
-                log_result "  Failed: $failed"
-                
-                if [[ $failed -gt 0 ]]; then
-                    log_warning "Some downloads failed. Check the detailed response for error information."
-                fi
+            if [[ $successful -eq 0 ]]; then
+                log_error "❌ ALL downloads failed! This indicates a serious issue."
+                return 1
+            else
+                log_warning "⚠️  Partial success: $successful/$total downloads completed"
+                return 2  # Partial failure exit code
             fi
-            
-            echo ""
-            log_info "Detailed Response:"
-            cat response.json | jq . 2>/dev/null || cat response.json
+        else
+            log_success "🎉 All $successful downloads completed successfully!"
         fi
+        
+        echo ""
+        log_info "📄 Detailed Response (first 20 lines):"
+        echo "$response_body" | jq . 2>/dev/null | head -20
+        
+        if [[ $(echo "$response_body" | jq . 2>/dev/null | wc -l) -gt 20 ]]; then
+            echo "... (truncated - see response.json for full details)"
+        fi
+        
     else
-        log_error "Bulk Lambda invocation failed with status code: $status_code"
+        log_error "Could not parse Lambda response body"
+        log_info "Raw response:"
+        cat response.json
+        return 1
     fi
 }
 
@@ -245,54 +378,113 @@ run_comparative() {
     log_progress "Simulation scenarios: $simulation_range"
     log_info "Methods: PROPOSED, MAPS, LINUCB, LINEAR_PROGRAM"
     
-    local payload="{\\\"vehicle_type\\\":\\\"$vehicle_type\\\",\\\"year\\\":$year,\\\"month\\\":$month,\\\"methods\\\":[\\\"proposed\\\",\\\"maps\\\",\\\"linucb\\\",\\\"linear_program\\\"],\\\"acceptance_function\\\":\\\"$acceptance_function\\\",\\\"simulation_range\\\":$simulation_range}"
+    local payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month,\"methods\":[\"proposed\",\"maps\",\"linucb\",\"linear_program\"],\"acceptance_function\":\"$acceptance_function\",\"simulation_range\":$simulation_range}"
     
-    log_progress "Invoking experiment runner Lambda..."
-    log_info "This may take 2-5 minutes to complete all methods..."
+    log_progress "Invoking experiment runner Lambda (waiting for completion)..."
+    echo "⏱️  Please wait - running all 4 methods may take 5-10 minutes..."
+    echo ""
     
+    # Remove output redirection to see real-time progress and errors
     /usr/local/bin/aws lambda invoke \
         --function-name rideshare-experiment-runner \
         --payload "$payload" \
         --region $REGION \
         --cli-binary-format raw-in-base64-out \
-        response.json > /dev/null 2>&1
-
-    local status_code=$?
+        response.json
     
-    if [[ $status_code -eq 0 ]]; then
-        log_success "Experiment Lambda invocation completed"
+    local status_code=$?
+    echo ""
+    
+    # Check AWS CLI invocation status
+    if [[ $status_code -ne 0 ]]; then
+        log_error "AWS Lambda invocation failed with exit code: $status_code"
+        log_error "This could indicate network issues, authentication problems, or Lambda service errors"
+        return 1
+    fi
+    
+    # Check if response file was created
+    if [[ ! -f response.json ]]; then
+        log_error "No response file generated - Lambda invocation may have failed"
+        return 1
+    fi
+    
+    log_success "Lambda invocation completed - processing results..."
+    
+    # Parse and validate response
+    local response_body
+    local lambda_status_code
+    local lambda_error_type
+    local lambda_error_message
+    
+    # Check for Lambda execution errors first
+    lambda_error_type=$(cat response.json | jq -r '.errorType // ""' 2>/dev/null)
+    lambda_error_message=$(cat response.json | jq -r '.errorMessage // ""' 2>/dev/null)
+    
+    if [[ -n "$lambda_error_type" && "$lambda_error_type" != "" ]]; then
+        log_error "Lambda function execution failed!"
+        log_error "Error Type: $lambda_error_type"
+        log_error "Error Message: $lambda_error_message"
+        echo ""
+        log_info "Full error response:"
+        cat response.json | jq . 2>/dev/null || cat response.json
+        return 1
+    fi
+    
+    # Check HTTP status code
+    lambda_status_code=$(cat response.json | jq -r '.statusCode // ""' 2>/dev/null)
+    if [[ "$lambda_status_code" != "200" ]]; then
+        log_error "Lambda function returned non-200 status code: $lambda_status_code"
+        echo ""
+        log_info "Full response:"
+        cat response.json | jq . 2>/dev/null || cat response.json
+        return 1
+    fi
+    
+    # Parse successful response body
+    response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
+    
+    if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+        local experiment_id
+        local methods_tested
+        local s3_key
+        local best_method
+        local best_objective
         
-        if [[ -f response.json ]]; then
-            log_progress "Parsing experiment results..."
-            
-            local response_body
-            response_body=$(cat response.json | jq -r '.body' 2>/dev/null)
-            
-            if [[ "$response_body" != "null" && -n "$response_body" ]]; then
-                # Try to extract key metrics
-                local experiment_id
-                local s3_key
-                local best_method
-                local match_rate
-                
-                experiment_id=$(echo "$response_body" | jq -r '.experiment_id // "unknown"' 2>/dev/null)
-                s3_key=$(echo "$response_body" | jq -r '.s3_key // ""' 2>/dev/null)
-                
-                log_success "Comparative experiment completed!"
-                log_result "Experiment ID: $experiment_id"
-                
-                if [[ -n "$s3_key" && "$s3_key" != "null" ]]; then
-                    log_result "Results stored at: s3://magisterka/$s3_key"
-                    log_info "Use './run_experiment.sh analyze $experiment_id' to view detailed analysis"
-                fi
-            fi
-            
-            echo ""
-            log_info "Detailed Response:"
-            cat response.json | jq . 2>/dev/null || cat response.json
+        experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
+        methods_tested=$(echo "$response_body" | jq -r '.methods_tested // []' 2>/dev/null)
+        s3_key=$(echo "$response_body" | jq -r '.s3_key // ""' 2>/dev/null)
+        best_method=$(echo "$response_body" | jq -r '.best_method // ""' 2>/dev/null)
+        best_objective=$(echo "$response_body" | jq -r '.best_objective_value // 0' 2>/dev/null)
+        
+        log_success "🎉 Comparative experiment completed successfully!"
+        log_result "🧪 EXPERIMENT SUMMARY:"
+        log_result "  🆔 Experiment ID: $experiment_id"
+        log_result "  📋 Methods Tested: $(echo "$methods_tested" | jq -r 'join(", ")' 2>/dev/null)"
+        log_result "  🏆 Best Method: $(echo "$best_method" | tr '[:lower:]' '[:upper:]')"
+        log_result "  📊 Best Objective: $(printf "%.2f" $best_objective)"
+        log_result "  📁 S3 Location: s3://$BUCKET_NAME/$s3_key"
+        
+        echo ""
+        log_info "📈 Method Performance Ranking:"
+        echo "$response_body" | jq -r '.results[] | "  \(.rank). \(.method | ascii_upcase): \(.objective_value)"' 2>/dev/null | head -10
+        
+        echo ""
+        log_info "📄 Analysis Command:"
+        echo "  python local-manager/results_manager.py analyze $experiment_id"
+        
+        echo ""
+        log_info "📄 Full Response (first 30 lines):"
+        echo "$response_body" | jq . 2>/dev/null | head -30
+        
+        if [[ $(echo "$response_body" | jq . 2>/dev/null | wc -l) -gt 30 ]]; then
+            echo "... (truncated - see response.json for full details)"
         fi
+        
     else
-        log_error "Experiment Lambda invocation failed with status code: $status_code"
+        log_error "Could not parse Lambda response body"
+        log_info "Raw response:"
+        cat response.json
+        return 1
     fi
 }
 
@@ -413,59 +605,361 @@ main() {
     fi
 
     local command=$1
-    shift
-
+    
     echo ""
     log_info "Enhanced Rideshare Experiment Runner"
     log_info "Command: $command"
     echo ""
-
-    case $command in
+    
+    case "$command" in
         "download-single")
-            if [[ $# -lt 3 ]]; then
+            if [[ $# -lt 4 ]]; then
                 log_error "Usage: $0 download-single <vehicle_type> <year> <month> [limit]"
                 return 1
             fi
-            download_single "$@"
+            download_single "${@:2}"
             ;;
         "download-bulk")
-            if [[ $# -lt 3 ]]; then
+            if [[ $# -lt 4 ]]; then
                 log_error "Usage: $0 download-bulk <year> <start_month> <end_month> [vehicle_types]"
                 return 1
             fi
-            download_bulk "$@"
+            download_bulk "${@:2}"
             ;;
         "list-data")
-            list_data
+            list_data "${@:2}"
             ;;
         "run-single")
-            if [[ $# -lt 4 ]]; then
+            if [[ $# -lt 5 ]]; then
                 log_error "Usage: $0 run-single <vehicle_type> <year> <month> <method> [acceptance_func] [scenarios]"
                 return 1
             fi
-            run_single "$@"
+            run_single "${@:2}"
             ;;
         "run-comparative")
-            if [[ $# -lt 3 ]]; then
+            if [[ $# -lt 4 ]]; then
                 log_error "Usage: $0 run-comparative <vehicle_type> <year> <month> [acceptance_func] [scenarios]"
                 return 1
             fi
-            run_comparative "$@"
+            run_comparative "${@:2}"
             ;;
-        "list-experiments")
-            list_experiments "$@"
+        "run-benchmark")
+            if [[ $# -lt 4 ]]; then
+                log_error "Usage: $0 run-benchmark <vehicle_type> <year> <month> [scenarios]"
+                return 1
+            fi
+            run_benchmark "${@:2}"
+            ;;
+        "test-window-time")
+            if [[ $# -lt 6 ]]; then
+                log_error "Usage: $0 test-window-time <vehicle_type> <year> <month> <method> <window_seconds>"
+                return 1
+            fi
+            test_window_time "${@:2}"
+            ;;
+        "test-acceptance-functions")
+            if [[ $# -lt 5 ]]; then
+                log_error "Usage: $0 test-acceptance-functions <vehicle_type> <year> <month> <method>"
+                return 1
+            fi
+            test_acceptance_functions "${@:2}"
+            ;;
+        "test-meta-params")
+            if [[ $# -lt 5 ]]; then
+                log_error "Usage: $0 test-meta-params <vehicle_type> <year> <month> <method>"
+                return 1
+            fi
+            test_meta_params "${@:2}"
+            ;;
+        "run-with-params")
+            if [[ $# -lt 5 ]]; then
+                log_error "Usage: $0 run-with-params <vehicle_type> <year> <month> <method> [params_json]"
+                return 1
+            fi
+            run_with_params "${@:2}"
+            ;;
+        "parameter-sweep")
+            if [[ $# -lt 5 ]]; then
+                log_error "Usage: $0 parameter-sweep <vehicle_type> <year> <month> <method>"
+                return 1
+            fi
+            parameter_sweep "${@:2}"
             ;;
         "analyze")
-            analyze "$@"
+            if [[ $# -lt 2 ]]; then
+                log_error "Usage: $0 analyze <experiment_id>"
+                return 1
+            fi
+            analyze "${@:2}"
+            ;;
+        "list-experiments")
+            list_experiments "${@:2}"
+            ;;
+        "show-experiment")
+            if [[ $# -lt 2 ]]; then
+                log_error "Usage: $0 show-experiment <experiment_id>"
+                return 1
+            fi
+            show_experiment "${@:2}"
+            ;;
+        "compare-methods")
+            if [[ $# -lt 3 ]]; then
+                log_error "Usage: $0 compare-methods <experiment_id_1> <experiment_id_2>"
+                return 1
+            fi
+            compare_methods "${@:2}"
             ;;
         *)
-            log_error "Unknown command: $command"
-            echo ""
             show_help
-            return 1
+            exit 1
             ;;
     esac
 }
 
-# Run main function
+# Add new advanced command implementations
+
+test_meta_params() {
+    local vehicle_type=$1
+    local year=$2
+    local month=$3
+    local method=$4
+    
+    log_info "Testing meta-parameters for $method method"
+    log_progress "Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
+    log_progress "Period: $year-$(printf %02d $month)"
+    
+    echo ""
+    log_info "🧪 Running meta-parameter sensitivity analysis..."
+    
+    # Test different num_eval values
+    echo ""
+    log_info "📊 Testing num_eval parameter (Monte Carlo evaluations):"
+    for num_eval in 50 100 200; do
+        log_progress "Testing num_eval=$num_eval..."
+        
+        local payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month,\"methods\":[\"$method\"],\"acceptance_function\":\"PL\",\"simulation_range\":2,\"num_eval\":$num_eval}"
+        
+        /usr/local/bin/aws lambda invoke \
+            --function-name rideshare-experiment-runner \
+            --payload "$payload" \
+            --region $REGION \
+            --cli-binary-format raw-in-base64-out \
+            response_numeval_${num_eval}.json > /dev/null 2>&1
+        
+        if [[ $? -eq 0 ]]; then
+            local obj_value=$(cat response_numeval_${num_eval}.json | jq -r '.body' | jq -r '.performance.objective_value // "0"' 2>/dev/null | sed 's/,//g')
+            log_result "  num_eval=$num_eval → Objective: $(printf "%.2f" $obj_value)"
+        else
+            log_warning "  num_eval=$num_eval → Failed"
+        fi
+    done
+    
+    # Test different window_time values
+    echo ""
+    log_info "⏰ Testing window_time parameter (matching window):"
+    for window_time in 180 300 600; do
+        log_progress "Testing window_time=${window_time}s..."
+        
+        local payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month,\"methods\":[\"$method\"],\"acceptance_function\":\"PL\",\"simulation_range\":2,\"window_time\":$window_time}"
+        
+        /usr/local/bin/aws lambda invoke \
+            --function-name rideshare-experiment-runner \
+            --payload "$payload" \
+            --region $REGION \
+            --cli-binary-format raw-in-base64-out \
+            response_window_${window_time}.json > /dev/null 2>&1
+        
+        if [[ $? -eq 0 ]]; then
+            local obj_value=$(cat response_window_${window_time}.json | jq -r '.body' | jq -r '.performance.objective_value // "0"' 2>/dev/null | sed 's/,//g')
+            log_result "  window_time=${window_time}s → Objective: $(printf "%.2f" $obj_value)"
+        else
+            log_warning "  window_time=${window_time}s → Failed"
+        fi
+    done
+    
+    # Test different alpha values
+    echo ""
+    log_info "🚖 Testing alpha parameter (algorithm parameter):"
+    for alpha in 10 18 25; do
+        log_progress "Testing alpha=$alpha..."
+        
+        local payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month,\"methods\":[\"$method\"],\"acceptance_function\":\"PL\",\"simulation_range\":2,\"alpha\":$alpha}"
+        
+        /usr/local/bin/aws lambda invoke \
+            --function-name rideshare-experiment-runner \
+            --payload "$payload" \
+            --region $REGION \
+            --cli-binary-format raw-in-base64-out \
+            response_alpha_${alpha}.json > /dev/null 2>&1
+        
+        if [[ $? -eq 0 ]]; then
+            local obj_value=$(cat response_alpha_${alpha}.json | jq -r '.body' | jq -r '.performance.objective_value // "0"' 2>/dev/null | sed 's/,//g')
+            log_result "  alpha=$alpha → Objective: $(printf "%.2f" $obj_value)"
+        else
+            log_warning "  alpha=$alpha → Failed"
+        fi
+    done
+    
+    log_success "🎉 Meta-parameter testing completed!"
+    log_info "📄 Results saved to response_*_*.json files"
+}
+
+run_with_params() {
+    local vehicle_type=$1
+    local year=$2
+    local month=$3
+    local method=$4
+    local params_json=${5:-"{}"}
+    
+    log_info "Running experiment with custom parameters"
+    log_progress "Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
+    log_progress "Period: $year-$(printf %02d $month)"
+    log_progress "Method: $(echo "$method" | tr '[:lower:]' '[:upper:]')"
+    log_progress "Custom params: $params_json"
+    
+    # Build base payload
+    local base_payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month,\"methods\":[\"$method\"]"
+    
+    # Merge with custom parameters (simplified - could be more sophisticated)
+    local payload="$base_payload"
+    if [[ "$params_json" != "{}" ]]; then
+        # Extract and add custom parameters (basic implementation)
+        payload="${base_payload%?},$params_json}"
+        payload="${payload#\{}"
+        payload="{$payload"
+    else
+        payload="$base_payload}"
+    fi
+    
+    log_progress "Invoking Lambda with custom parameters..."
+    echo ""
+    
+    /usr/local/bin/aws lambda invoke \
+        --function-name rideshare-experiment-runner \
+        --payload "$payload" \
+        --region $REGION \
+        --cli-binary-format raw-in-base64-out \
+        response.json
+    
+    local status_code=$?
+    echo ""
+    
+    if [[ $status_code -eq 0 ]]; then
+        log_success "🎉 Custom parameter experiment completed!"
+        
+        local response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
+        if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+            local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
+            log_result "  🆔 Experiment ID: $experiment_id"
+            
+            echo ""
+            log_info "📄 Analysis Command:"
+            echo "  python local-manager/results_manager.py analyze $experiment_id"
+        fi
+    else
+        log_error "Custom parameter experiment failed"
+    fi
+}
+
+parameter_sweep() {
+    local vehicle_type=$1
+    local year=$2
+    local month=$3
+    local method=$4
+    
+    log_info "Running comprehensive parameter sweep"
+    log_progress "Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
+    log_progress "Period: $year-$(printf %02d $month)"
+    log_progress "Method: $(echo "$method" | tr '[:lower:]' '[:upper:]')"
+    
+    echo ""
+    log_warning "⚠️  This will run multiple experiments and may take 15-20 minutes"
+    echo ""
+    
+    # Parameter combinations to test
+    local window_times=(180 300 600)
+    local num_evals=(50 100 200)
+    local alphas=(10 18 25)
+    local acceptance_functions=("PL" "Sigmoid")
+    
+    local total_experiments=$((${#window_times[@]} * ${#num_evals[@]} * ${#alphas[@]} * ${#acceptance_functions[@]}))
+    local current_experiment=0
+    
+    log_info "🔬 Running $total_experiments parameter combinations..."
+    
+    # Create results summary file
+    local sweep_results="parameter_sweep_${vehicle_type}_${year}_${month}_${method}_$(date +%Y%m%d_%H%M%S).csv"
+    echo "window_time,num_eval,alpha,acceptance_function,objective_value,match_rate,experiment_id" > $sweep_results
+    
+    for window_time in "${window_times[@]}"; do
+        for num_eval in "${num_evals[@]}"; do
+            for alpha in "${alphas[@]}"; do
+                for acceptance_func in "${acceptance_functions[@]}"; do
+                    current_experiment=$((current_experiment + 1))
+                    
+                    log_progress "[$current_experiment/$total_experiments] Testing: window=${window_time}s, eval=$num_eval, alpha=$alpha, func=$acceptance_func"
+                    
+                    local payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"month\":$month,\"methods\":[\"$method\"],\"acceptance_function\":\"$acceptance_func\",\"simulation_range\":2,\"window_time\":$window_time,\"num_eval\":$num_eval,\"alpha\":$alpha}"
+                    
+                    /usr/local/bin/aws lambda invoke \
+                        --function-name rideshare-experiment-runner \
+                        --payload "$payload" \
+                        --region $REGION \
+                        --cli-binary-format raw-in-base64-out \
+                        sweep_response_${current_experiment}.json > /dev/null 2>&1
+                    
+                    if [[ $? -eq 0 ]]; then
+                        local response_body=$(cat sweep_response_${current_experiment}.json | jq -r '.body // ""' 2>/dev/null)
+                        if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+                            local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
+                            local obj_value=$(echo "$response_body" | jq -r '.method_results[].summary.avg_objective_value // 0' 2>/dev/null || echo "0")
+                            local match_rate=$(echo "$response_body" | jq -r '.method_results[].summary.avg_match_rate // 0' 2>/dev/null || echo "0")
+                            
+                            echo "$window_time,$num_eval,$alpha,$acceptance_func,$obj_value,$match_rate,$experiment_id" >> $sweep_results
+                            log_result "    → Obj: $(printf "%.0f" $obj_value), Match: $(printf "%.2f%%" $(echo "$match_rate * 100" | bc -l 2>/dev/null || echo "0"))"
+                        fi
+                    else
+                        log_warning "    → Failed"
+                        echo "$window_time,$num_eval,$alpha,$acceptance_func,0,0,FAILED" >> $sweep_results
+                    fi
+                    
+                    # Small delay to avoid overwhelming the Lambda
+                    sleep 2
+                done
+            done
+        done
+    done
+    
+    log_success "🎉 Parameter sweep completed!"
+    log_result "📊 Results saved to: $sweep_results"
+    log_info "📈 Best performing combinations:"
+    
+    # Show top 3 results
+    tail -n +2 $sweep_results | sort -t',' -k5 -nr | head -3 | while IFS=',' read -r wt ne alpha func obj match exp_id; do
+        log_result "  Objective $obj: window=${wt}s, eval=$ne, alpha=$alpha, func=$func"
+    done
+}
+
+# Add missing command implementations
+show_experiment() {
+    local experiment_id=$1
+    
+    log_info "Showing experiment details"
+    log_progress "Experiment ID: $experiment_id"
+    
+    python local-manager/results_manager.py show "$experiment_id"
+}
+
+compare_methods() {
+    local exp_id_1=$1
+    local exp_id_2=$2
+    
+    log_info "Comparing experiment methods"
+    log_progress "Experiment 1: $exp_id_1"
+    log_progress "Experiment 2: $exp_id_2"
+    
+    python local-manager/results_manager.py compare "$exp_id_1" "$exp_id_2"
+}
+
+# Run main function with all arguments
 main "$@" 
