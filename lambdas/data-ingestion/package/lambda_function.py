@@ -28,12 +28,14 @@ DATA_SOURCES = {
     'cloudfront': {
         'name': 'NYC TLC CloudFront CDN',
         'base_url': 'https://d37ci6vzurychx.cloudfront.net/trip-data',
+        'url_template': 'https://d37ci6vzurychx.cloudfront.net/trip-data/{vehicle_type}_tripdata_{year}-{month:02d}.parquet',
         'priority': 1,
         'timeout': 120
     },
     'open_data_api': {
         'name': 'NYC Open Data API', 
         'base_url': 'https://data.cityofnewyork.us/resource',
+        'url_template': 'https://data.cityofnewyork.us/resource/{endpoint}.json',
         'priority': 2,
         'timeout': 180,
         'endpoints': {
@@ -395,6 +397,25 @@ def download_from_open_data_api(source_config: Dict[str, Any], vehicle_type: str
     
     # Would implement API querying here with proper Socrata API calls
     raise NotImplementedError("NYC Open Data API integration coming soon")
+
+def create_success_response(vehicle_type: str, year: int, month: int, s3_key: str, 
+                          file_size: int, source: str, download_time: float = 0, url: str = "") -> Dict[str, Any]:
+    """Create a standardized success response."""
+    size_mb = file_size / 1024 / 1024
+    
+    return {
+        'status': 'success',
+        'vehicle_type': vehicle_type,
+        'year': year,
+        'month': month,
+        's3_key': s3_key,
+        'size_bytes': file_size,
+        'size_mb': round(size_mb, 2),
+        'data_source': source,
+        'download_time_seconds': round(download_time, 2) if download_time else 0,
+        'url': url if url else "N/A",
+        'records_processed': "N/A"  # Could be filled in if we parse the file
+    }
 
 if __name__ == "__main__":
     # Test event
