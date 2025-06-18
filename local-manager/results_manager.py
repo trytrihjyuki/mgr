@@ -53,11 +53,11 @@ class ExperimentResultsManager:
         Returns:
             List of experiment metadata
         """
-        # New partitioned structure: experiments/results/rideshare/type=*/eval=*/year=*/month=*/
+        # New partitioned structure: experiments/rideshare/type=*/eval=*/year=*/month=*/
         prefixes = []
         
         # Build prefixes for partitioned structure
-        base_prefix = f"experiments/results/{experiment_type}/"
+        base_prefix = f"experiments/{experiment_type}/"
         for vehicle_type in ['green', 'yellow', 'fhv']:
             for eval_type in ['pl', 'sigmoid']:
                 prefixes.append(f"{base_prefix}type={vehicle_type}/eval={eval_type}/")
@@ -186,8 +186,8 @@ class ExperimentResultsManager:
             for eval_type in ['pl', 'sigmoid']:
                 for year in range(2019, 2025):
                     for month in range(1, 13):
-                        # Pattern: experiments/results/rideshare/type=green/eval=pl/year=2019/month=03/run_20250617_220136.json
-                        possible_keys.append(f"experiments/results/rideshare/type={vehicle_type}/eval={eval_type}/year={year}/month={month:02d}/{experiment_id}.json")
+                        # Pattern: experiments/rideshare/type=green/eval=pl/year=2019/month=03/run_20250617_220136.json
+                        possible_keys.append(f"experiments/rideshare/type={vehicle_type}/eval={eval_type}/year={year}/month={month:02d}/{experiment_id}.json")
         
         # Legacy structure patterns
         legacy_patterns = [
@@ -238,9 +238,9 @@ class ExperimentResultsManager:
         try:
             # Try to list all experiment files and find matching one
             prefixes_to_search = [
-                "experiments/results/rideshare/type=green/",
-                "experiments/results/rideshare/type=yellow/", 
-                "experiments/results/rideshare/type=fhv/",
+                "experiments/rideshare/type=green/",
+                "experiments/rideshare/type=yellow/", 
+                "experiments/rideshare/type=fhv/",
                 "experiments/results/rideshare/pl/",
                 "experiments/results/rideshare/sigmoid/",
                 "experiments/results/rideshare/"

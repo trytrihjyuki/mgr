@@ -626,8 +626,8 @@ class FixedBipartiteMatchingExperiment:
         return algorithm_names.get(method, method)
 
 def build_s3_path(vehicle_type, acceptance_function, year, month, experiment_id):
-    """Build properly partitioned S3 path"""
-    return f"experiments/results/rideshare/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    """Build properly partitioned S3 path without redundant /results"""
+    return f"experiments/rideshare/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
 def create_clean_response(results, s3_key, upload_success):
     """Create clean response matching README format"""

@@ -95,7 +95,8 @@ class S3DataManager:
             'datasets/yellow/',
             'datasets/fhv/',
             'experiments/',
-            'experiments/results/',
+            'experiments/rideshare/',
+            'experiments/crowdsourcing/',
             'experiments/analysis/',
             'experiments/logs/'
         ]
@@ -370,9 +371,9 @@ class S3DataManager:
         Returns:
             List of experiment result information
         """
-        prefix = 'experiments/results/'
+        prefix = 'experiments/'
         if experiment_type:
-            prefix = f'experiments/results/{experiment_type}/'
+            prefix = f'experiments/{experiment_type}/'
         
         try:
             response = self.s3_client.list_objects_v2(
