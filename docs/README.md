@@ -71,19 +71,17 @@ This system extends the original `experiment_PL.py` to benchmark **all methods**
 
 ## 🗂️ Documentation Structure
 
-- **[README.md](README.md)** - This overview (start here)
-- **[SCENARIOS_VS_NUM_EVAL_EXPLANATION.md](SCENARIOS_VS_NUM_EVAL_EXPLANATION.md)** - Scenarios vs num_eval distinction
-- **[HIKIMA_COMPLIANCE_DOCUMENTATION.md](HIKIMA_COMPLIANCE_DOCUMENTATION.md)** - Original refactoring details
-- **[DATA_AVAILABILITY_SOLUTION.md](DATA_AVAILABILITY_SOLUTION.md)** - Data availability fixes
-- **[COMPLETE_DOCUMENTATION.md](COMPLETE_DOCUMENTATION.md)** - Legacy comprehensive docs
+- **[README.md](README.md)** - This overview (start here)  
+- **[CURRENT_SYSTEM_DOCUMENTATION.md](CURRENT_SYSTEM_DOCUMENTATION.md)** - Complete system documentation
+- **[SCENARIOS_VS_NUM_EVAL_EXPLANATION.md](SCENARIOS_VS_NUM_EVAL_EXPLANATION.md)** - Parameter explanation
+- **[HIKIMA_COMPLIANCE_DOCUMENTATION.md](HIKIMA_COMPLIANCE_DOCUMENTATION.md)** - Algorithm compliance details
 
 ## 🔧 System Architecture
 
-### **Simplified Lambda Structure**
+### **Lambda Structure**
 ```
 lambdas/experiment-runner/
-├── lambda_function.py              # Legacy experiment runner
-├── lambda_function_unified.py      # New unified runner (recommended)
+├── lambda_function.py              # Unified experiment runner
 └── lambda-package/                 # Deployment package
 ```
 

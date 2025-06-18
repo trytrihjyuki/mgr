@@ -1,7 +1,8 @@
 # Bipartite Matching AWS Project - .gitignore
 local-cache/
 response*
-
+*lambda-package*
+*package*
 # ===== Python =====
 # Byte-compiled / optimized / DLL files
 __pycache__/

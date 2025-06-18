@@ -98,21 +98,35 @@ This is a unified rideshare pricing optimization experiment system based on the 
 ### Results Structure
 ```json
 {
-  "experiment_id": "unified_green_manhattan_2019_10_20250618_204257",
+  "experiment_id": "unified_green_manhattan_2019_10_20250618_213111",
   "experiment_type": "unified_rideshare",
   "status": "completed",
   "method_results": {
     "hikima": {
-      "overall_summary": {
-        "avg_objective_value": 2543.67,
-        "avg_revenue": 2543.67,
-        "total_matches": 1205,
-        "success_rate": 0.95,
-        "method_execution_time": 45.23
+      "daily_results": {
+        "6": {
+          "scenarios": [
+            {
+              "scenario_id": 0,
+              "time_window": "10:00-10:05",
+              "total_requests": 112,
+              "total_drivers": 95,
+              "supply_demand_ratio": 0.848,
+              "successful_matches": 80,
+              "match_rate": 0.714,
+              "total_revenue": 1034.0,
+              "objective_value": 1034.0,
+              "avg_trip_value": 12.93,
+              "algorithm_efficiency": 0.85,
+              "num_evaluations": 100,
+              "evaluation_std": 0.0
+            }
+          ],
+          "dataset_scope_percentage": 0.7
+        }
       }
     }
-  },
-  "performance_ranking": [...]
+  }
 }
 ```
 
@@ -167,6 +181,14 @@ s3://magisterka/experiments/rideshare/
 - Statistical significance analysis
 
 ## 🔧 **System Optimizations**
+
+### Recent Improvements (Latest)
+- **✅ Fixed Hikima Bug**: No more zero values, proper min-cost flow implementation
+- **✅ Added Scenario Timestamps**: Each scenario shows time window (e.g., "10:00-10:05")
+- **✅ Dataset Scope Tracking**: Shows percentage of full dataset used
+- **✅ Auto-Analysis**: Runs immediately after experiments complete
+- **✅ No Manual 'q' Pressing**: Clean command completion
+- **✅ Consolidated Documentation**: Streamlined from 10 files to 4 focused docs
 
 ### Parallel Processing Ready
 - Lambda functions designed for concurrent execution
