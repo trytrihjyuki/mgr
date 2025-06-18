@@ -577,9 +577,9 @@ class UnifiedExperimentRunner:
 
 
 def build_s3_path(vehicle_type: str, acceptance_function: str, year: int, months: List[int], experiment_id: str) -> str:
-    """Build S3 path for unified experiments."""
-    months_str = "-".join(f"{m:02d}" for m in months)
-    return f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/months={months_str}/unified_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    """Build S3 path for unified experiments (single month only - multi-month not supported)."""
+    month = months[0]  # Use first month since multi-month not supported
+    return f"experiments/type={vehicle_type}/eval={acceptance_function.lower()}/year={year}/month={month:02d}/unified_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
 
 def create_unified_response(results: Dict[str, Any], s3_key: str, upload_success: bool) -> Dict[str, Any]:
