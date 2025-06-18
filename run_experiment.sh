@@ -59,11 +59,12 @@ show_help() {
     echo "  test-acceptance-functions <vehicle_type> <year> <month> <method>"
     echo "  test-meta-params <vehicle_type> <year> <month> <method>"
     echo ""
-    echo -e "${YELLOW}Hikima-Compliant Experiments:${NC}"
-    echo "  run-hikima <vehicle_type> <year> <months> [days] [methods]"
-    echo "    Example: run-hikima green 2019 \"3,4,5\" \"6,10\" \"hikima,maps,linucb\""
-    echo "  run-multi-month <vehicle_type> <year> <months> [methods] [acceptance_func]"
-    echo "    Example: run-multi-month yellow 2019 \"3,4,5,6\" \"hikima,maps\" PL"
+    echo -e "${YELLOW}Unified Experiments (experiment_PL.py format):${NC}"
+    echo "  run-experiment <start_hour> <end_hour> <time_interval> <place> <time_step> <month> <day> <year> [vehicle_type] [methods] [acceptance_func]"
+    echo "    Example: run-experiment 10 20 5m Manhattan 30s 10 6 2019 green \"hikima,maps,linucb,linear_program\" PL"
+    echo "    Example: run-experiment 10 20 5m Bronx 300s 10 6 2019"
+    echo "  run-multi-month <start_hour> <end_hour> <time_interval> <place> <time_step> <months> <days> <year> [vehicle_type] [methods] [acceptance_func]"
+    echo "    Example: run-multi-month 10 20 5m Manhattan 30s \"3,4,5\" \"6,10\" 2019 green \"hikima,maps\" PL"
     echo ""
     echo -e "${YELLOW}Advanced Experiment Commands:${NC}"
     echo "  run-with-params <vehicle_type> <year> <month> <method> [params_json]"
@@ -90,25 +91,27 @@ show_help() {
     echo "  $0 download-single green 2019 3"
     echo "  $0 download-bulk 2019 1 3 green,yellow"
     echo "  $0 run-comparative green 2019 3 PL 5"
-    echo "  $0 run-hikima green 2019 \"3,4\" \"6,10\" \"hikima,maps,linucb\""
-    echo "  $0 run-multi-month yellow 2019 \"3,4,5,6\" \"hikima,maps\" PL"
+    echo "  $0 run-experiment 10 20 5m Manhattan 30s 10 6 2019 green \"hikima,maps,linucb,linear_program\" PL"
+    echo "  $0 run-experiment 10 20 5m Bronx 300s 10 6 2019    # Minimal format with defaults"
+    echo "  $0 run-multi-month 10 20 5m Manhattan 30s \"3,4,5\" \"6,10\" 2019 green \"hikima,maps\" PL"
     echo "  $0 test-window-time green 2019 3 linear_program 600"
-    echo "  $0 analyze hikima_green_2019_3-4_hikima_maps_linucb_pl_20250618_123456"
+    echo "  $0 analyze unified_green_manhattan_2019_10_20250618_123456"
     echo "  $0 parameter-sweep green 2019 3 proposed"
     echo ""
     echo -e "${YELLOW}Available Methods:${NC}"
-    echo "  Standard: proposed, maps, linucb, linear_program"
-    echo "  Hikima-Compliant: hikima, maps, linucb"
+    echo "  Unified: hikima, maps, linucb, linear_program"
+    echo "  Legacy: proposed (=hikima), maps, linucb, linear_program"
     echo -e "${YELLOW}Available Vehicle Types:${NC} green, yellow, fhv"
     echo -e "${YELLOW}Available Years:${NC} 2013-2023 (historical data now available)"
     echo -e "${YELLOW}Available Acceptance Functions:${NC} PL, Sigmoid"
     echo ""
     echo -e "${CYAN}✨ New Features:${NC}"
-    echo "  📋 Hikima Paper Compliance: Exact experimental setup from research paper"
-    echo "  📅 Multi-month Support: Run experiments across multiple months"
-    echo "  📊 Enhanced Results: Monthly summaries + daily summaries for plotting"
-    echo "  🚫 No Duplication: Cleaner JSON structure without repeated elements"
-    echo "  🗓️  Historical Data: Now supports 2013-2016 data (previously blocked)"
+    echo "  📋 Original Format: Extended experiment_PL.py with all methods (hikima, maps, linucb, linear_program)"
+    echo "  📅 Multi-temporal: Single days, multiple days, multiple months support"
+    echo "  📊 Unified Results: Monthly summaries + daily summaries for comprehensive analysis"
+    echo "  🚫 No Duplication: Clean JSON structure without repeated elements"
+    echo "  🗓️  Historical Data: Now supports 2013-2023 data (fixed availability issues)"
+    echo "  🎯 Scenarios vs num_eval: Clear distinction between time periods (scenarios) and Monte Carlo evaluations (num_eval)"
 }
 
 # Enhanced download single with detailed logging
@@ -601,47 +604,66 @@ list_experiments() {
     python local-manager/results_manager.py list $days
 }
 
-# Run Hikima-compliant experiments
-run_hikima_experiment() {
-    local vehicle_type=$1
-    local year=$2
-    local months_str=$3
-    local days_str=${4:-"6,10"}  # Default: Sunday and Thursday as per paper
-    local methods_str=${5:-"hikima,maps,linucb"}
-    local acceptance_function=${6:-"PL"}
+# Run unified experiment (following original experiment_PL.py structure)
+run_unified_experiment() {
+    local start_hour=$1
+    local end_hour=$2
+    local time_interval_str=$3  # e.g., "5m" or "30s"
+    local place=$4
+    local time_step_str=$5      # e.g., "30s" or "300s"
+    local month=$6
+    local day=$7
+    local year=$8
+    local vehicle_type=${9:-"green"}
+    local methods_str=${10:-"hikima,maps,linucb,linear_program"}
+    local acceptance_function=${11:-"PL"}
     
-    log_info "🧪 Starting Hikima-compliant experiment"
-    log_progress "Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
-    log_progress "Year: $year"
-    log_progress "Months: $months_str"
-    log_progress "Days: $days_str (per paper: 6=Sunday, 10=Thursday)"
-    log_progress "Methods: $methods_str"
-    log_progress "Acceptance function: $acceptance_function"
+    # Parse time values
+    local time_interval=$(echo "$time_interval_str" | sed 's/[ms]//g')
+    local time_unit=$(echo "$time_interval_str" | sed 's/[0-9]//g')
+    local time_step=$(echo "$time_step_str" | sed 's/s//g')
+    
+    # Calculate simulation_range (number of time periods)
+    local total_minutes=$(( (end_hour - start_hour) * 60 ))
+    local interval_minutes=$time_interval
+    if [[ "$time_unit" == "s" ]]; then
+        interval_minutes=$(( time_interval / 60 ))
+    fi
+    local simulation_range=$(( total_minutes / interval_minutes ))
+    
+    log_info "🧪 Starting unified experiment (based on experiment_PL.py)"
+    log_progress "📍 Place: $place"
+    log_progress "📅 Date: $year-$(printf %02d $month)-$(printf %02d $day)"
+    log_progress "🕐 Time: ${start_hour}:00-${end_hour}:00 (${time_interval}${time_unit} intervals)"
+    log_progress "⏱️  Time step: ${time_step}s"
+    log_progress "📊 Simulation range: $simulation_range scenarios"
+    log_progress "🚗 Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
+    log_progress "🔬 Methods: $methods_str"
+    log_progress "🎯 Acceptance: $acceptance_function"
     
     echo ""
-    log_info "📋 Hikima Paper Compliance:"
-    log_progress "✓ Time setup: Every 5 minutes from 10:00-20:00 (120 scenarios/day)"
-    log_progress "✓ Regions: Manhattan (30s), Queens/Bronx/Brooklyn (300s)"
-    log_progress "✓ Evaluation: Monte Carlo N=100 iterations"
-    log_progress "✓ Parameters: α=18.0 (opportunity cost)"
+    log_info "📋 Original experiment_PL.py Parameters:"
+    log_progress "✓ place=$place"
+    log_progress "✓ day=$day"
+    log_progress "✓ time_interval=$time_interval"
+    log_progress "✓ time_unit=$time_unit"
+    log_progress "✓ simulation_range=$simulation_range"
     
     echo ""
-    log_warning "⚠️  This experiment may take 15-30 minutes depending on months/days"
+    log_warning "⚠️  Experiment may take 10-20 minutes depending on simulation range"
     echo ""
     
-    # Convert comma-separated strings to JSON arrays
-    local months_json=$(echo "[$months_str]" | sed 's/,/, /g')
-    local days_json=$(echo "[$days_str]" | sed 's/,/, /g')
+    # Convert methods string to JSON array
     local methods_json=$(echo "[\"$(echo "$methods_str" | sed 's/,/", "/g')\"]")
     
-    local payload="{\"vehicle_type\":\"$vehicle_type\",\"year\":$year,\"months\":$months_json,\"days\":$days_json,\"methods\":$methods_json,\"acceptance_function\":\"$acceptance_function\"}"
+    local payload="{\"place\":\"$place\",\"day\":$day,\"time_interval\":$time_interval,\"time_unit\":\"$time_unit\",\"simulation_range\":$simulation_range,\"year\":$year,\"month\":$month,\"vehicle_type\":\"$vehicle_type\",\"methods\":$methods_json,\"acceptance_function\":\"$acceptance_function\",\"num_eval\":100}"
     
-    log_progress "Invoking Hikima-compliant Lambda (waiting for completion)..."
-    echo "⏱️  Please wait - comprehensive Hikima experiment in progress..."
+    log_progress "Invoking unified experiment Lambda..."
+    echo "⏱️  Please wait - running unified experiment..."
     echo ""
     
     /usr/local/bin/aws lambda invoke \
-        --function-name rideshare-experiment-runner-hikima \
+        --function-name rideshare-experiment-runner \
         --payload "$payload" \
         --region $REGION \
         --cli-binary-format raw-in-base64-out \
@@ -651,61 +673,111 @@ run_hikima_experiment() {
     echo ""
     
     if [[ $status_code -eq 0 ]]; then
-        log_success "🎉 Hikima experiment completed!"
+        log_success "🎉 Unified experiment completed!"
         
         # Parse results
         local response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
         if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
             local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
-            local best_method=$(echo "$response_body" | jq -r '.performance_results.best_objective_value.method // ""' 2>/dev/null)
-            local best_value=$(echo "$response_body" | jq -r '.performance_results.best_objective_value.value // ""' 2>/dev/null)
+            local best_method=$(echo "$response_body" | jq -r '.best_method // ""' 2>/dev/null)
             
             log_result "🆔 Experiment ID: $experiment_id"
-            log_result "🏆 Best Method: $best_method ($best_value)"
-            
-            echo ""
-            log_info "📊 Results Analysis:"
-            echo "$response_body" | jq -r '.performance_results.performance_ranking[]? // empty' 2>/dev/null | while read -r line; do
-                log_result "  $line"
-            done
+            log_result "🏆 Best Method: $best_method"
             
             echo ""
             log_info "📄 Analysis Command:"
             echo "  python local-manager/results_manager.py analyze $experiment_id"
         fi
     else
-        log_error "Hikima experiment failed"
+        log_error "Unified experiment failed"
     fi
 }
 
-# Run multi-month experiments
-run_multi_month_experiment() {
-    local vehicle_type=$1
-    local year=$2
-    local months_str=$3
-    local methods_str=${4:-"hikima,maps,linucb"}
-    local acceptance_function=${5:-"PL"}
-    local days_str=${6:-"6,10"}  # Default days per Hikima paper
+# Run multi-month unified experiments  
+run_multi_month_unified() {
+    local start_hour=$1
+    local end_hour=$2
+    local time_interval_str=$3
+    local place=$4
+    local time_step_str=$5
+    local months_str=$6         # e.g., "3,4,5"
+    local days_str=$7           # e.g., "6,10" 
+    local year=$8
+    local vehicle_type=${9:-"green"}
+    local methods_str=${10:-"hikima,maps,linucb,linear_program"}
+    local acceptance_function=${11:-"PL"}
     
-    log_info "📅 Starting multi-month experiment"
-    log_progress "Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
-    log_progress "Year: $year"
-    log_progress "Months: $months_str"
-    log_progress "Methods: $methods_str"
-    log_progress "Acceptance function: $acceptance_function"
+    log_info "📅 Starting multi-month unified experiment"
+    log_progress "📍 Place: $place"
+    log_progress "📅 Year: $year"
+    log_progress "📅 Months: $months_str"
+    log_progress "📅 Days: $days_str"
+    log_progress "🕐 Time: ${start_hour}:00-${end_hour}:00 (${time_interval_str} intervals)"
+    log_progress "🚗 Vehicle: $(echo "$vehicle_type" | tr '[:lower:]' '[:upper:]') taxi"
     
     echo ""
     log_info "📋 Multi-Month Features:"
     log_progress "✓ Monthly summaries for trend analysis"
     log_progress "✓ Daily summaries for plotting"
     log_progress "✓ Cross-month comparative statistics"
-    log_progress "✓ Seasonal performance analysis"
     
     echo ""
     log_warning "⚠️  Multi-month experiments can take 30-60 minutes"
+    echo ""
     
-    # Use same format as Hikima experiment
-    run_hikima_experiment "$vehicle_type" "$year" "$months_str" "$days_str" "$methods_str" "$acceptance_function"
+    # Parse time values
+    local time_interval=$(echo "$time_interval_str" | sed 's/[ms]//g')
+    local time_unit=$(echo "$time_interval_str" | sed 's/[0-9]//g')
+    local time_step=$(echo "$time_step_str" | sed 's/s//g')
+    
+    # Calculate simulation_range
+    local total_minutes=$(( (end_hour - start_hour) * 60 ))
+    local interval_minutes=$time_interval
+    if [[ "$time_unit" == "s" ]]; then
+        interval_minutes=$(( time_interval / 60 ))
+    fi
+    local simulation_range=$(( total_minutes / interval_minutes ))
+    
+    # Convert comma-separated strings to JSON arrays
+    local months_json=$(echo "[$months_str]" | sed 's/,/, /g')
+    local days_json=$(echo "[$days_str]" | sed 's/,/, /g')
+    local methods_json=$(echo "[\"$(echo "$methods_str" | sed 's/,/", "/g')\"]")
+    
+    local payload="{\"place\":\"$place\",\"day\":$days_json,\"time_interval\":$time_interval,\"time_unit\":\"$time_unit\",\"simulation_range\":$simulation_range,\"year\":$year,\"month\":$months_json,\"vehicle_type\":\"$vehicle_type\",\"methods\":$methods_json,\"acceptance_function\":\"$acceptance_function\",\"num_eval\":100}"
+    
+    log_progress "Invoking multi-month unified Lambda..."
+    echo "⏱️  Please wait - running multi-month experiment..."
+    echo ""
+    
+    /usr/local/bin/aws lambda invoke \
+        --function-name rideshare-experiment-runner \
+        --payload "$payload" \
+        --region $REGION \
+        --cli-binary-format raw-in-base64-out \
+        response.json
+    
+    local status_code=$?
+    echo ""
+    
+    if [[ $status_code -eq 0 ]]; then
+        log_success "🎉 Multi-month unified experiment completed!"
+        
+        # Parse results
+        local response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
+        if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
+            local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
+            local best_method=$(echo "$response_body" | jq -r '.best_method // ""' 2>/dev/null)
+            
+            log_result "🆔 Experiment ID: $experiment_id"
+            log_result "🏆 Best Method: $best_method"
+            
+            echo ""
+            log_info "📄 Analysis Command:"
+            echo "  python local-manager/results_manager.py analyze $experiment_id"
+        fi
+    else
+        log_error "Multi-month unified experiment failed"
+    fi
 }
 
 # Enhanced analysis
@@ -777,21 +849,22 @@ main() {
             fi
             run_comparative "${@:2}"
             ;;
-        "run-hikima")
-            if [[ $# -lt 4 ]]; then
-                log_error "Usage: $0 run-hikima <vehicle_type> <year> <months> [days] [methods]"
-                log_error "Example: $0 run-hikima green 2019 \"3,4,5\" \"6,10\" \"hikima,maps,linucb\""
+        "run-experiment")
+            if [[ $# -lt 9 ]]; then
+                log_error "Usage: $0 run-experiment <start_hour> <end_hour> <time_interval> <place> <time_step> <month> <day> <year> [vehicle_type] [methods] [acceptance_func]"
+                log_error "Example: $0 run-experiment 10 20 5m Manhattan 30s 10 6 2019 green \"hikima,maps,linucb,linear_program\" PL"
+                log_error "Example: $0 run-experiment 10 20 5m Bronx 300s 10 6 2019"
                 return 1
             fi
-            run_hikima_experiment "${@:2}"
+            run_unified_experiment "${@:2}"
             ;;
         "run-multi-month")
-            if [[ $# -lt 4 ]]; then
-                log_error "Usage: $0 run-multi-month <vehicle_type> <year> <months> [methods] [acceptance_func]"
-                log_error "Example: $0 run-multi-month yellow 2019 \"3,4,5,6\" \"hikima,maps\" PL"
+            if [[ $# -lt 9 ]]; then
+                log_error "Usage: $0 run-multi-month <start_hour> <end_hour> <time_interval> <place> <time_step> <months> <days> <year> [vehicle_type] [methods] [acceptance_func]"
+                log_error "Example: $0 run-multi-month 10 20 5m Manhattan 30s \"3,4,5\" \"6,10\" 2019 green \"hikima,maps\" PL"
                 return 1
             fi
-            run_multi_month_experiment "${@:2}"
+            run_multi_month_unified "${@:2}"
             ;;
         "run-benchmark")
             if [[ $# -lt 4 ]]; then
