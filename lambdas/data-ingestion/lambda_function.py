@@ -20,8 +20,8 @@ logger.setLevel(logging.INFO)
 # S3 and HTTP configuration
 s3_client = boto3.client('s3')
 BUCKET_NAME = 'magisterka'
-TIMEOUT = 300  # 5 minutes timeout
-CHUNK_SIZE = 8192  # 8KB chunks for streaming
+TIMEOUT = 840  # 14 minutes timeout (leave 1 min for processing)
+CHUNK_SIZE = 1024 * 1024  # 1MB chunks for large files
 
 # Data source configurations
 DATA_SOURCES = {
@@ -166,11 +166,19 @@ def download_single_dataset(event: Dict[str, Any]) -> Dict[str, Any]:
     
     download_start = time.time()
     
-    # Try each data source in order
+    # Try CloudFront first (optimized for large files)
     last_error = None
+    try:
+        logger.info(f"🌐 Trying CloudFront CDN for large file support...")
+        return download_from_cloudfront_streaming(vehicle_type, year, month, s3_key, download_start)
+    except Exception as e:
+        logger.warning(f"❌ CloudFront streaming failed: {str(e)}")
+        last_error = str(e)
+    
+    # Fallback: Try each data source with basic streaming
     for source_name, source_config in DATA_SOURCES.items():
         try:
-            logger.info(f"🌐 Trying {source_config['name']}...")
+            logger.info(f"🌐 Trying {source_config['name']} (fallback)...")
             
             url = source_config['url_template'].format(
                 vehicle_type=vehicle_type,
@@ -178,31 +186,40 @@ def download_single_dataset(event: Dict[str, Any]) -> Dict[str, Any]:
                 month=month
             )
             
-            # Make request with timeout
-            response = requests.get(url, stream=True, timeout=TIMEOUT)
+            # Check file size first
+            head_response = requests.head(url, timeout=30)
+            if head_response.status_code != 200:
+                raise Exception(f"HTTP {head_response.status_code}")
+                
+            file_size = int(head_response.headers.get('Content-Length', 0))
+            size_mb = file_size / 1024 / 1024
             
-            if response.status_code == 200:
-                # Stream to S3
-                upload_response = s3_client.put_object(
-                    Bucket=BUCKET_NAME,
-                    Key=s3_key,
-                    Body=response.content,
-                    ContentType='application/octet-stream'
-                )
-                
-                download_time = time.time() - download_start
-                file_size = len(response.content)
-                
-                logger.info(f"✅ Successfully downloaded {file_size:,} bytes from {source_config['name']}")
-                
-                return create_success_response(
-                    vehicle_type, year, month, s3_key, file_size, 
-                    source_config['name'], download_time, url
-                )
+            logger.info(f"📏 File size: {size_mb:.1f}MB")
+            
+            if size_mb > 200:  # Large file - use streaming
+                logger.info(f"📦 Large file detected, using streaming upload...")
+                return download_large_file_streaming(url, s3_key, vehicle_type, year, month, 
+                                                   source_config['name'], download_start)
             else:
-                error_msg = f"HTTP {response.status_code}"
-                logger.warning(f"❌ {source_config['name']}: {error_msg}")
-                last_error = error_msg
+                # Small file - use simple approach
+                response = requests.get(url, timeout=TIMEOUT)
+                if response.status_code == 200:
+                    s3_client.put_object(
+                        Bucket=BUCKET_NAME,
+                        Key=s3_key,
+                        Body=response.content,
+                        ContentType='application/octet-stream'
+                    )
+                    
+                    download_time = time.time() - download_start
+                    logger.info(f"✅ Successfully downloaded {len(response.content):,} bytes")
+                    
+                    return create_success_response(
+                        vehicle_type, year, month, s3_key, len(response.content), 
+                        source_config['name'], download_time, url
+                    )
+                else:
+                    raise Exception(f"HTTP {response.status_code}")
                 
         except Exception as e:
             error_msg = str(e)
@@ -397,6 +414,96 @@ def download_from_open_data_api(source_config: Dict[str, Any], vehicle_type: str
     
     # Would implement API querying here with proper Socrata API calls
     raise NotImplementedError("NYC Open Data API integration coming soon")
+
+def download_from_cloudfront_streaming(vehicle_type: str, year: int, month: int, 
+                                     s3_key: str, start_time: float) -> Dict[str, Any]:
+    """Optimized CloudFront download with streaming for large files."""
+    
+    url = f"https://d37ci6vzurychx.cloudfront.net/trip-data/{vehicle_type}_tripdata_{year}-{month:02d}.parquet"
+    
+    logger.info(f"🌐 CloudFront URL: {url}")
+    
+    # Check file exists and get size
+    head_response = requests.head(url, timeout=30)
+    if head_response.status_code != 200:
+        raise Exception(f"File not found: HTTP {head_response.status_code}")
+    
+    file_size = int(head_response.headers.get('Content-Length', 0))
+    size_mb = file_size / 1024 / 1024
+    
+    logger.info(f"📏 File size: {size_mb:.1f}MB ({file_size:,} bytes)")
+    
+    if size_mb > 200:
+        logger.info(f"📦 Large file detected - using optimized streaming")
+    
+    # Stream download and upload
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (compatible; DataIngestion/1.0)'
+    })
+    
+    with session.get(url, stream=True, timeout=TIMEOUT) as response:
+        response.raise_for_status()
+        
+        # Use upload_fileobj for efficient streaming
+        logger.info(f"📤 Starting streaming upload to S3...")
+        
+        upload_start = time.time()
+        s3_client.upload_fileobj(
+            response.raw,
+            BUCKET_NAME, 
+            s3_key,
+            ExtraArgs={'ContentType': 'application/octet-stream'}
+        )
+        
+        total_time = time.time() - start_time
+        upload_time = time.time() - upload_start
+        speed_mbps = size_mb / total_time if total_time > 0 else 0
+        
+        logger.info(f"✅ Streaming upload complete: {size_mb:.1f}MB in {total_time:.1f}s ({speed_mbps:.1f} MB/s)")
+        
+        return create_success_response(
+            vehicle_type, year, month, s3_key, file_size,
+            "NYC TLC CloudFront CDN", total_time, url
+        )
+
+def download_large_file_streaming(url: str, s3_key: str, vehicle_type: str, year: int, month: int,
+                                source_name: str, start_time: float) -> Dict[str, Any]:
+    """Generic large file streaming download."""
+    
+    logger.info(f"📦 Large file streaming from: {url}")
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (compatible; DataIngestion/1.0)'
+    })
+    
+    with session.get(url, stream=True, timeout=TIMEOUT) as response:
+        response.raise_for_status()
+        
+        # Get file size from headers
+        file_size = int(response.headers.get('Content-Length', 0))
+        size_mb = file_size / 1024 / 1024
+        
+        logger.info(f"📤 Streaming {size_mb:.1f}MB to S3...")
+        
+        upload_start = time.time()
+        s3_client.upload_fileobj(
+            response.raw,
+            BUCKET_NAME, 
+            s3_key,
+            ExtraArgs={'ContentType': 'application/octet-stream'}
+        )
+        
+        total_time = time.time() - start_time
+        speed_mbps = size_mb / total_time if total_time > 0 else 0
+        
+        logger.info(f"✅ Large file upload complete: {size_mb:.1f}MB in {total_time:.1f}s ({speed_mbps:.1f} MB/s)")
+        
+        return create_success_response(
+            vehicle_type, year, month, s3_key, file_size,
+            source_name, total_time, url
+        )
 
 def create_success_response(vehicle_type: str, year: int, month: int, s3_key: str, 
                           file_size: int, source: str, download_time: float = 0, url: str = "") -> Dict[str, Any]:
