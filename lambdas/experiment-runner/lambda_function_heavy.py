@@ -49,7 +49,7 @@ class BipartiteMatchingExperiment:
             raise
     
     def preprocess_data(self, df: pd.DataFrame, simulation_range: int = 5, 
-                       full_day_experiment: bool = False) -> Dict[str, Any]:
+                       start_hour: int = 10, end_hour: int = 20) -> Dict[str, Any]:
         """
         Preprocess rideshare data following Hikima methodology.
         
@@ -82,15 +82,13 @@ class BipartiteMatchingExperiment:
         df['hour'] = df['pickup_datetime'].dt.hour
         df['day_of_week'] = df['pickup_datetime'].dt.dayofweek
         
-        # Filter for business hours (10:00-20:00 as in Hikima paper)
-        # For 24-hour experiments, skip hour filtering
-        if not full_day_experiment:
-            df = df[(df['hour'] >= 10) & (df['hour'] < 20)]
-            logger.info("🕐 Filtered for business hours (10:00-20:00)")
-            time_range = "10:00-20:00"
-        else:
-            logger.info("🌙 Running 24-hour experiment (00:00-23:59)")
-            time_range = "00:00-23:59"
+        # Filter for user-specified time range (CRITICAL: user-controlled)
+        df = df[(df['hour'] >= start_hour) & (df['hour'] < end_hour)]
+        time_range = f"{start_hour:02d}:00-{end_hour:02d}:00"
+        logger.info(f"🕐 Filtered for time range: {time_range}")
+        
+        # Determine if this is a full day experiment
+        is_full_day = (start_hour == 0 and end_hour == 24)
         
         # Load real taxi zones data
         if self.taxi_zones_df is None:
@@ -136,73 +134,50 @@ class BipartiteMatchingExperiment:
         df_sample = df.sample(n=sample_size, random_state=42)
         
         # Create time-based scenarios following Hikima methodology
+        # FIXED: Now works with any user-specified time range
         scenarios = []
+        total_hours = end_hour - start_hour
         
-        if not full_day_experiment:
-            # Standard business hours experiment (10:00-20:00)
-            for i in range(simulation_range):
-                hour_offset = i * 2  # Different 2-hour periods
-                target_hour = 10 + (hour_offset % 10)  # Within 10:00-20:00 range
-                
-                time_filtered = df_sample[
-                    (df_sample['hour'] >= target_hour) & 
-                    (df_sample['hour'] < target_hour + 2)
-                ]
-                
-                if len(time_filtered) == 0:
-                    time_filtered = df_sample.head(100)
-                
-                demand_factor = random.uniform(0.8, 1.2)
-                supply_factor = random.uniform(0.8, 1.2)
-                
-                scenarios.append({
-                    'scenario_id': i,
-                    'demand_factor': demand_factor,
-                    'supply_factor': supply_factor,
-                    'target_hour': target_hour,
-                    'time_period': f"{target_hour:02d}:00-{target_hour+2:02d}:00",
-                    'data_sample': time_filtered.reset_index(drop=True)
-                })
+        if total_hours <= 0:
+            raise ValueError(f"Invalid time range: start_hour ({start_hour}) must be less than end_hour ({end_hour})")
+        
+        # Calculate time period duration for each scenario
+        if simulation_range > total_hours:
+            # More scenarios than hours - use smaller time periods
+            hours_per_scenario = total_hours / simulation_range
         else:
-            # 24-hour experiment - create scenarios for different time periods
-            time_periods = [
-                (0, 6, "Night (00:00-06:00)"),
-                (6, 10, "Early Morning (06:00-10:00)"),
-                (10, 14, "Morning Rush (10:00-14:00)"),
-                (14, 18, "Afternoon (14:00-18:00)"),
-                (18, 22, "Evening Rush (18:00-22:00)"),
-                (22, 24, "Late Night (22:00-24:00)")
+            # Fewer scenarios than hours - use 1+ hour periods
+            hours_per_scenario = max(1, total_hours // simulation_range)
+        
+        for i in range(simulation_range):
+            # Calculate target hour for this scenario
+            scenario_start_hour = start_hour + (i * total_hours / simulation_range)
+            scenario_end_hour = min(end_hour, scenario_start_hour + hours_per_scenario)
+            
+            # Ensure we stay within bounds
+            scenario_start_hour = max(start_hour, min(end_hour - 1, int(scenario_start_hour)))
+            scenario_end_hour = max(scenario_start_hour + 1, min(end_hour, int(scenario_end_hour) + 1))
+            
+            time_filtered = df_sample[
+                (df_sample['hour'] >= scenario_start_hour) & 
+                (df_sample['hour'] < scenario_end_hour)
             ]
             
-            for i, (start_hour, end_hour, period_name) in enumerate(time_periods[:simulation_range]):
-                time_filtered = df_sample[
-                    (df_sample['hour'] >= start_hour) & 
-                    (df_sample['hour'] < end_hour)
-                ]
-                
-                if len(time_filtered) == 0:
-                    time_filtered = df_sample.head(100)
-                
-                # Different demand/supply patterns for different times of day
-                if "Rush" in period_name:
-                    demand_factor = random.uniform(1.2, 1.8)  # Higher demand during rush
-                    supply_factor = random.uniform(0.8, 1.1)  # Lower supply during rush
-                elif "Night" in period_name or "Late" in period_name:
-                    demand_factor = random.uniform(0.3, 0.7)  # Lower demand at night
-                    supply_factor = random.uniform(0.5, 0.8)  # Lower supply at night
-                else:
-                    demand_factor = random.uniform(0.8, 1.2)  # Normal variation
-                    supply_factor = random.uniform(0.8, 1.2)
-                
-                scenarios.append({
-                    'scenario_id': i,
-                    'demand_factor': demand_factor,
-                    'supply_factor': supply_factor,
-                    'target_hour': start_hour,
-                    'time_period': f"{start_hour:02d}:00-{end_hour:02d}:00",
-                    'period_name': period_name,
-                    'data_sample': time_filtered.reset_index(drop=True)
-                })
+            if len(time_filtered) == 0:
+                time_filtered = df_sample.head(100)  # Fallback
+            
+            # Time-of-day based demand/supply patterns
+            demand_factor, supply_factor = self._calculate_demand_supply_factors(scenario_start_hour)
+            
+            scenarios.append({
+                'scenario_id': i,
+                'demand_factor': demand_factor,
+                'supply_factor': supply_factor,
+                'target_hour': scenario_start_hour,
+                'end_hour': scenario_end_hour,
+                'time_period': f"{scenario_start_hour:02d}:00-{scenario_end_hour:02d}:00",
+                'data_sample': time_filtered.reset_index(drop=True)
+            })
         
         return {
             'original_size': len(df),
@@ -210,11 +185,38 @@ class BipartiteMatchingExperiment:
             'scenarios': scenarios,
             'preprocessing_time': datetime.now().isoformat(),
             'hikima_compliant': True,
-            'business_hours_only': not full_day_experiment,
-            'borough_based': True,
             'time_range': time_range,
-            'experiment_duration': "24_hours" if full_day_experiment else "business_hours"
+            'start_hour': start_hour,
+            'end_hour': end_hour,
+            'total_hours': total_hours,
+            'is_full_day': is_full_day,
+            'borough_based': True
         }
+    
+    def _calculate_demand_supply_factors(self, hour: int) -> tuple:
+        """
+        Calculate demand and supply factors based on time of day.
+        Returns (demand_factor, supply_factor) tuple.
+        """
+        # Rush hour patterns
+        if 7 <= hour <= 9 or 17 <= hour <= 19:
+            # Morning and evening rush hours
+            demand_factor = random.uniform(1.2, 1.8)  # Higher demand during rush
+            supply_factor = random.uniform(0.8, 1.1)  # Lower supply during rush
+        elif 22 <= hour <= 23 or 0 <= hour <= 6:
+            # Night hours
+            demand_factor = random.uniform(0.3, 0.7)  # Lower demand at night
+            supply_factor = random.uniform(0.5, 0.8)  # Lower supply at night
+        elif 10 <= hour <= 16:
+            # Business hours
+            demand_factor = random.uniform(0.9, 1.3)  # Steady business demand
+            supply_factor = random.uniform(0.9, 1.2)  # Good supply availability
+        else:
+            # Other hours (transitions)
+            demand_factor = random.uniform(0.8, 1.2)  # Normal variation
+            supply_factor = random.uniform(0.8, 1.2)  # Normal variation
+            
+        return demand_factor, supply_factor
     
     def load_taxi_zones_data(self):
         """Load real NYC taxi zones data from S3."""
@@ -392,9 +394,9 @@ class BipartiteMatchingExperiment:
     
     def run_experiment(self, vehicle_type: str, year: int, month: int,
                       place: str = "Manhattan", simulation_range: int = 5,
-                      acceptance_function: str = 'PL', full_day_experiment: bool = False,
-                      multi_day_experiment: bool = False, start_day: int = 1, 
-                      end_day: int = 1) -> Dict[str, Any]:
+                      acceptance_function: str = 'PL', start_hour: int = 10, 
+                      end_hour: int = 20, multi_day_experiment: bool = False, 
+                      start_day: int = 1, end_day: int = 1) -> Dict[str, Any]:
         """
         Run Hikima-compliant rideshare experiment.
         
@@ -405,6 +407,11 @@ class BipartiteMatchingExperiment:
             place: NYC borough (Manhattan, Brooklyn, Queens, Bronx)
             simulation_range: Number of simulation scenarios
             acceptance_function: Type of acceptance function (PL or Sigmoid)
+            start_hour: Start hour for filtering (0-23, default 10 for 10:00 AM)
+            end_hour: End hour for filtering (1-24, default 20 for 8:00 PM)
+            multi_day_experiment: Whether to run across multiple days
+            start_day: Start day for multi-day experiments (1-31)
+            end_day: End day for multi-day experiments (1-31)
             
         Returns:
             Complete Hikima-compliant experiment results
@@ -440,7 +447,7 @@ class BipartiteMatchingExperiment:
                 # Single day experiment
                 df = self.load_data_from_s3(vehicle_type, year, month)
             
-            preprocessed = self.preprocess_data(df, simulation_range, full_day_experiment)
+            preprocessed = self.preprocess_data(df, simulation_range, start_hour, end_hour)
             
             # Run experiments on all scenarios using real data
             scenario_results = []
@@ -470,7 +477,10 @@ class BipartiteMatchingExperiment:
                 'hikima_setup': {
                     'paper_reference': 'Hikima et al. rideshare pricing optimization',
                     'time_setup': {
-                        'business_hours': '10:00-20:00',
+                        'time_range': f"{start_hour:02d}:00-{end_hour:02d}:00",
+                        'start_hour': start_hour,
+                        'end_hour': end_hour,
+                        'user_controlled': True,
                         'regions': ['Manhattan', 'Brooklyn', 'Queens', 'Bronx'],
                         'distance_based_sorting': True
                     },
@@ -504,7 +514,11 @@ class BipartiteMatchingExperiment:
                 'data_info': {
                     'original_data_size': preprocessed['original_size'],
                     'processed_data_size': preprocessed['processed_size'],
-                    'business_hours_filtered': preprocessed.get('business_hours_only', False),
+                    'time_range': preprocessed['time_range'],
+                    'start_hour': preprocessed['start_hour'],
+                    'end_hour': preprocessed['end_hour'],
+                    'total_hours': preprocessed['total_hours'],
+                    'is_full_day_experiment': preprocessed['is_full_day'],
                     'borough_classified': preprocessed.get('borough_based', False),
                     'taxi_zones_loaded': len(self.taxi_zones_df) if self.taxi_zones_df is not None else 0,
                     'unique_boroughs': list(self.taxi_zones_df['borough'].unique()) if self.taxi_zones_df is not None else [],
@@ -596,7 +610,12 @@ def lambda_handler(event, context):
         "month": 3,
         "place": "Manhattan",
         "simulation_range": 5,
-        "acceptance_function": "PL|Sigmoid"
+        "acceptance_function": "PL|Sigmoid",
+        "start_hour": 10,  // Start hour (0-23, default 10)
+        "end_hour": 20,    // End hour (1-24, default 20)
+        "multi_day_experiment": false,
+        "start_day": 1,    // For multi-day experiments
+        "end_day": 1       // For multi-day experiments
     }
     """
     
@@ -609,8 +628,11 @@ def lambda_handler(event, context):
         simulation_range = event.get('simulation_range', 5)
         acceptance_function = event.get('acceptance_function', 'PL')
         
-        # New parameters for 24-hour and multi-day experiments
-        full_day_experiment = event.get('full_day_experiment', False)
+        # Time filtering parameters (CRITICAL: user-controlled)
+        start_hour = event.get('start_hour', 10)  # Default 10:00 AM
+        end_hour = event.get('end_hour', 20)      # Default 8:00 PM
+        
+        # Extended experiment parameters
         multi_day_experiment = event.get('multi_day_experiment', False)
         start_day = event.get('start_day', 1)
         end_day = event.get('end_day', 1)
@@ -624,7 +646,8 @@ def lambda_handler(event, context):
             place=place,
             simulation_range=simulation_range,
             acceptance_function=acceptance_function,
-            full_day_experiment=full_day_experiment,
+            start_hour=start_hour,
+            end_hour=end_hour,
             multi_day_experiment=multi_day_experiment,
             start_day=start_day,
             end_day=end_day

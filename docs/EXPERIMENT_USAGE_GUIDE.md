@@ -45,21 +45,34 @@ This guide shows you how to run different types of rideshare pricing experiments
 }
 ```
 
-### **2. 24-Hour Full Day Experiment**
+### **2. Custom Time Range Experiments**
 
-**Use Case**: Understand demand patterns across entire day
-**Duration**: 00:00-23:59 (full 24 hours)
-**Best For**: Market analysis, demand forecasting
+**Use Case**: Analyze specific time periods (fully user-controlled)
+**Duration**: Any time range you specify
+**Best For**: Targeted analysis, rush hour studies, night patterns
 
 ```json
 {
   "vehicle_type": "yellow", 
   "year": 2019,
   "month": 6,
-  "full_day_experiment": true,
+  "start_hour": 0,     // Start at midnight
+  "end_hour": 24,      // End at midnight (24-hour experiment)
   "simulation_range": 6,
   "acceptance_function": "Sigmoid"
 }
+```
+
+**Other Time Range Examples**:
+```json
+// Rush hour only (7 AM - 10 AM)
+{"start_hour": 7, "end_hour": 10}
+
+// Business hours (9 AM - 6 PM)  
+{"start_hour": 9, "end_hour": 18}
+
+// Evening only (6 PM - 11 PM)
+{"start_hour": 18, "end_hour": 23}
 ```
 
 **Time Periods Analyzed**:
@@ -107,7 +120,8 @@ This guide shows you how to run different types of rideshare pricing experiments
   "multi_day_experiment": true,
   "start_day": 1,
   "end_day": 7,
-  "full_day_experiment": true,
+  "start_hour": 0,      // 24-hour analysis
+  "end_hour": 24,       // Full day coverage
   "simulation_range": 6
 }
 ```
@@ -143,7 +157,8 @@ This guide shows you how to run different types of rideshare pricing experiments
   "vehicle_type": "yellow",
   "year": 2019,
   "month": 3,
-  "full_day_experiment": true,
+  "start_hour": 0,
+  "end_hour": 24,
   "simulation_range": 6,
   "focus": "rush_hours"
 }
@@ -163,7 +178,8 @@ This guide shows you how to run different types of rideshare pricing experiments
   "multi_day_experiment": true,
   "start_day": 1,  // Monday
   "end_day": 7,    // Sunday
-  "full_day_experiment": true
+  "start_hour": 0,
+  "end_hour": 24
 }
 ```
 
@@ -182,7 +198,8 @@ This guide shows you how to run different types of rideshare pricing experiments
   "year": 2019,
   "month": 3,
   "place": "Manhattan",
-  "full_day_experiment": true
+  "start_hour": 0,
+  "end_hour": 24
 }
 ```
 
@@ -193,7 +210,8 @@ This guide shows you how to run different types of rideshare pricing experiments
   "year": 2019,
   "month": 3,
   "place": "Brooklyn",
-  "full_day_experiment": true
+  "start_hour": 0,
+  "end_hour": 24
 }
 ```
 
@@ -204,7 +222,8 @@ This guide shows you how to run different types of rideshare pricing experiments
   "year": 2019,
   "month": 3,
   "focus_zones": ["JFK Airport", "LaGuardia Airport"],
-  "full_day_experiment": true
+  "start_hour": 0,
+  "end_hour": 24
 }
 ```
 
@@ -252,12 +271,12 @@ Concurrency: 5
 Use Case: Development, quick tests
 ```
 
-### **24-Hour Experiments**
+### **Custom Time Range Experiments**
 ```yaml
 Memory: 1024 MB
 Timeout: 10 minutes
 Concurrency: 10
-Use Case: Full day analysis
+Use Case: Any time range analysis
 ```
 
 ### **Multi-Day Experiments**
@@ -283,7 +302,7 @@ Use Case: Large-scale research
 | Experiment Type | Data Size | Processing Time | Memory Needed |
 |----------------|-----------|-----------------|---------------|
 | **Single Day** | 5-15 MB | 2-3 minutes | 512 MB |
-| **24-Hour** | 50-150 MB | 5-8 minutes | 1024 MB |
+| **Custom Range** | 50-150 MB | 5-8 minutes | 1024 MB |
 | **Multi-Day (7 days)** | 300-1000 MB | 10-15 minutes | 2048 MB |
 | **Full Month** | 1-3 GB | 15+ minutes | 3008 MB |
 
@@ -373,7 +392,8 @@ curl -X POST https://api.your-domain.com/experiment \
     "vehicle_type": "green",
     "year": 2019,
     "month": 3,
-    "full_day_experiment": true,
+    "start_hour": 0,
+    "end_hour": 24,
     "simulation_range": 6
   }'
 ```
@@ -394,7 +414,8 @@ event = {
     "vehicle_type": "green",
     "year": 2019, 
     "month": 3,
-    "full_day_experiment": True,
+    "start_hour": 0,
+    "end_hour": 24,
     "simulation_range": 6
 }
 
@@ -406,7 +427,7 @@ print(json.dumps(result, indent=2))
 
 ### **Experiment Design**
 1. **Start small**: Begin with standard experiments
-2. **Scale gradually**: Move to 24-hour, then multi-day
+2. **Scale gradually**: Move to larger time ranges, then multi-day
 3. **Compare systematically**: Use same parameters across methods
 4. **Document thoroughly**: Record all parameter choices
 
@@ -428,7 +449,7 @@ print(json.dumps(result, indent=2))
 - **Paper replication**: Standard Hikima experiments
 - **Algorithm comparison**: All three methods on same data
 - **Parameter sensitivity**: Vary acceptance functions
-- **Temporal analysis**: 24-hour and multi-day patterns
+- **Temporal analysis**: Custom time ranges and multi-day patterns
 
 ### **Industry Applications**
 - **Market analysis**: Geographic demand patterns

@@ -73,13 +73,14 @@ The platform uses official NYC Taxi & Limousine Commission data:
 }
 ```
 
-### **2. 24-Hour Full Day Experiments**
+### **2. Custom Time Range Experiments**
 ```json
 {
   "vehicle_type": "yellow", 
   "year": 2019,
   "month": 3,
-  "full_day_experiment": true,
+  "start_hour": 0,    // User-controlled start hour (0-23)
+  "end_hour": 24,     // User-controlled end hour (1-24)
   "simulation_range": 6
 }
 ```
@@ -93,7 +94,8 @@ The platform uses official NYC Taxi & Limousine Commission data:
   "multi_day_experiment": true,
   "start_day": 1,
   "end_day": 7,
-  "full_day_experiment": true
+  "start_hour": 0,
+  "end_hour": 24
 }
 ```
 
@@ -208,7 +210,7 @@ curl -X POST https://api.your-domain.com/experiment \
   }'
 ```
 
-### **24-Hour Analysis**
+### **Custom Time Range Analysis**
 ```bash
 curl -X POST https://api.your-domain.com/experiment \
   -H "Content-Type: application/json" \
@@ -216,7 +218,8 @@ curl -X POST https://api.your-domain.com/experiment \
     "vehicle_type": "green", 
     "year": 2019,
     "month": 6,
-    "full_day_experiment": true,
+    "start_hour": 0,
+    "end_hour": 24,
     "simulation_range": 6
   }'
 ```
@@ -232,7 +235,8 @@ curl -X POST https://api.your-domain.com/experiment \
     "multi_day_experiment": true,
     "start_day": 1,
     "end_day": 7,
-    "full_day_experiment": true
+    "start_hour": 0,
+    "end_hour": 24
   }'
 ```
 
