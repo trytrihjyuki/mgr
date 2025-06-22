@@ -4,6 +4,282 @@
 
 This guide shows you how to run different types of rideshare pricing experiments using real NYC taxi data.
 
+## 🏃‍♂️ **Ready-to-Run Examples**
+
+**Copy these commands and run them directly!**
+
+### **🟢 Basic Examples (5 minutes each)**
+
+```bash
+# 1. Simple Hikima Paper Replication (Manhattan, Business Hours)
+./run_experiment.sh run-experiment 10 20 5m Manhattan 30s 10 6 2019 green "hikima,maps,linucb,linear_program" PL
+
+# 2. Fast Test Run (2 scenarios only)
+./run_experiment.sh run-experiment 15 17 30m Manhattan 30s 3 15 2019 yellow "hikima,maps" PL
+
+# 3. Different Borough - Brooklyn Analysis
+./run_experiment.sh run-experiment 10 20 5m Brooklyn 30s 10 6 2019 green "hikima,maps,linucb" PL
+
+# 4. Sigmoid Acceptance Function Test
+./run_experiment.sh run-experiment 10 20 10m Queens 60s 10 6 2019 green "hikima,maps" Sigmoid
+```
+
+### **⚡ Rush Hour Analysis**
+
+```bash
+# Morning Rush Hour (7-10 AM)
+./run_experiment.sh run-experiment 7 10 15m Manhattan 30s 1 6 2019 yellow "hikima,maps,linucb" PL
+
+# Evening Rush Hour (17-20 PM) 
+./run_experiment.sh run-experiment 17 20 10m Manhattan 30s 1 6 2019 yellow "hikima,maps,linucb" PL
+
+# Extended Rush Hours (7-10 AM + 17-20 PM combined analysis)
+./run_experiment.sh run-experiment 7 10 15m Manhattan 30s 1 6 2019 yellow "hikima,maps" PL
+./run_experiment.sh run-experiment 17 20 15m Manhattan 30s 1 6 2019 yellow "hikima,maps" PL
+```
+
+### **🌙 24-Hour Analysis**
+
+```bash
+# Full Day Analysis (all 24 hours)
+./run_experiment.sh run-experiment 0 24 60m Manhattan 60s 10 6 2019 green "hikima,maps" PL
+
+# Night-time Analysis (22:00-06:00)
+./run_experiment.sh run-experiment 22 24 30m Manhattan 60s 10 6 2019 green "hikima,maps" PL
+./run_experiment.sh run-experiment 0 6 30m Manhattan 60s 10 6 2019 green "hikima,maps" PL
+
+# Business Hours Extended (8 AM - 10 PM)
+./run_experiment.sh run-experiment 8 22 30m Manhattan 30s 10 6 2019 yellow "hikima,maps,linucb" PL
+```
+
+### **🗓️ Multi-Day Experiments** 
+
+```bash
+# Week Analysis (Monday-Sunday, March 2019)
+./run_experiment.sh run-multi-month 10 20 30m Manhattan 60s "3" "1,2,3,4,5,6,7" 2019 green "hikima,maps" PL
+
+# Weekend vs Weekday Comparison
+# Weekdays (Mon-Fri)
+./run_experiment.sh run-multi-month 0 24 60m Manhattan 60s "3" "2,3,4,5,6" 2019 green "hikima,maps" PL
+# Weekend (Sat-Sun)
+./run_experiment.sh run-multi-month 0 24 60m Manhattan 60s "3" "7,1" 2019 green "hikima,maps" PL
+
+# Multiple Months Analysis (March, April, May)
+./run_experiment.sh run-multi-month 10 20 30m Manhattan 60s "3,4,5" "10,15,20" 2019 green "hikima,maps" PL
+```
+
+### **🏙️ All Boroughs Comparison**
+
+```bash
+# Manhattan
+./run_experiment.sh run-experiment 10 20 15m Manhattan 30s 10 6 2019 yellow "hikima,maps,linucb" PL
+
+# Brooklyn  
+./run_experiment.sh run-experiment 10 20 15m Brooklyn 30s 10 6 2019 green "hikima,maps,linucb" PL
+
+# Queens
+./run_experiment.sh run-experiment 10 20 15m Queens 30s 10 6 2019 green "hikima,maps,linucb" PL
+
+# Bronx
+./run_experiment.sh run-experiment 10 20 15m Bronx 30s 10 6 2019 green "hikima,maps,linucb" PL
+```
+
+### **🔬 Algorithm Comparison Studies**
+
+```bash
+# All 4 Algorithms Head-to-Head
+./run_experiment.sh run-experiment 10 20 15m Manhattan 30s 10 6 2019 green "hikima,maps,linucb,linear_program" PL
+
+# Hikima vs MAPS Only
+./run_experiment.sh run-experiment 10 20 10m Manhattan 30s 10 6 2019 green "hikima,maps" PL
+
+# PL vs Sigmoid Acceptance Function Comparison
+./run_experiment.sh run-experiment 10 20 15m Manhattan 30s 10 6 2019 green "hikima,maps" PL
+./run_experiment.sh run-experiment 10 20 15m Manhattan 30s 10 6 2019 green "hikima,maps" Sigmoid
+```
+
+### **📅 Seasonal Analysis (Different Months)**
+
+```bash
+# Winter Analysis (January)
+./run_experiment.sh run-experiment 10 20 20m Manhattan 60s 1 15 2019 green "hikima,maps" PL
+
+# Spring Analysis (April)  
+./run_experiment.sh run-experiment 10 20 20m Manhattan 60s 4 15 2019 green "hikima,maps" PL
+
+# Summer Analysis (July)
+./run_experiment.sh run-experiment 10 20 20m Manhattan 60s 7 15 2019 green "hikima,maps" PL
+
+# Fall Analysis (October)
+./run_experiment.sh run-experiment 10 20 20m Manhattan 60s 10 15 2019 green "hikima,maps" PL
+```
+
+### **🚀 High-Performance/Large-Scale Experiments**
+
+```bash
+# High-Resolution Analysis (1-minute intervals)
+./run_experiment.sh run-experiment 15 18 1m Manhattan 30s 10 6 2019 yellow "hikima,maps" PL
+
+# Large Scenario Count (30 scenarios)
+./run_experiment.sh run-experiment 10 20 6m Manhattan 30s 30 6 2019 green "hikima,maps" PL
+
+# Extended Time Range (6 AM - 11 PM)
+./run_experiment.sh run-experiment 6 23 30m Manhattan 60s 15 6 2019 yellow "hikima,maps,linucb" PL
+```
+
+## 📊 **Command Format Explanation**
+
+```bash
+./run_experiment.sh run-experiment [start_hour] [end_hour] [time_interval] [place] [time_step] [month] [day] [year] [vehicle_type] [methods] [acceptance_func]
+```
+
+**Parameters**:
+- `start_hour`: 0-23 (e.g., 10 = 10:00 AM)
+- `end_hour`: 1-24 (e.g., 20 = 8:00 PM) 
+- `time_interval`: 5m, 10m, 30m, 60m (time window size)
+- `place`: Manhattan, Brooklyn, Queens, Bronx
+- `time_step`: 30s, 60s (simulation granularity)
+- `month`: 1-12 (data month)
+- `day`: 1-31 (specific day)
+- `year`: 2019, 2020, etc. (data year)
+- `vehicle_type`: green, yellow, fhv
+- `methods`: "hikima,maps,linucb,linear_program" (algorithms to test)
+- `acceptance_func`: PL, Sigmoid (acceptance function type)
+
+## ⚡ **Performance Expectations**
+
+| Experiment Type | Duration | Scenarios | Est. Time | Memory |
+|-----------------|----------|-----------|-----------|---------|
+| **Basic (10-20h)** | 10 hours | 5-10 | 3-5 min | 512MB |
+| **Rush Hour** | 3 hours | 12 | 2-3 min | 512MB |
+| **24-Hour** | 24 hours | 24 | 8-12 min | 1024MB |
+| **Multi-Day** | 7 days | 50+ | 15+ min | 2048MB |
+| **High-Res** | 3 hours (1m) | 180 | 10-15 min | 1024MB |
+
+## 🔧 **Quick Reference - Common Patterns**
+
+### **Most Used Commands**
+```bash
+# Quick Test (3 minutes)
+./run_experiment.sh run-experiment 15 17 30m Manhattan 30s 3 15 2019 yellow "hikima,maps" PL
+
+# Standard Research (Hikima Paper)
+./run_experiment.sh run-experiment 10 20 5m Manhattan 30s 10 6 2019 green "hikima,maps,linucb" PL
+
+# Full Day Analysis
+./run_experiment.sh run-experiment 0 24 60m Manhattan 60s 10 6 2019 green "hikima,maps" PL
+```
+
+### **Parameter Quick Reference**
+```bash
+# Time Ranges (Popular)
+start_hour=7  end_hour=10    # Morning Rush
+start_hour=17 end_hour=20    # Evening Rush  
+start_hour=10 end_hour=20    # Business Hours (Hikima)
+start_hour=0  end_hour=24    # Full Day
+
+# Boroughs
+Manhattan  # Yellow taxis primarily
+Brooklyn   # Green taxis primarily
+Queens     # Green taxis primarily
+Bronx      # Green taxis primarily
+
+# Vehicle Types
+yellow     # Manhattan focused
+green      # Outer boroughs
+fhv        # For hire vehicles
+
+# Methods Combinations
+"hikima,maps"                      # Fast comparison
+"hikima,maps,linucb"               # 3-way comparison
+"hikima,maps,linucb,linear_program" # Full comparison
+```
+
+## 🚨 **Troubleshooting Common Issues**
+
+### **❌ Command Not Found**
+```bash
+# Problem: ./run_experiment.sh: command not found
+# Solution: Make script executable
+chmod +x run_experiment.sh
+```
+
+### **❌ AWS Lambda Timeout**
+```bash
+# Problem: Function timed out after X seconds
+# Solution: Reduce experiment size or increase timeout
+
+# Instead of:
+./run_experiment.sh run-experiment 0 24 1m Manhattan 30s 30 6 2019 green "hikima,maps,linucb,linear_program" PL
+
+# Use:
+./run_experiment.sh run-experiment 10 20 10m Manhattan 30s 10 6 2019 green "hikima,maps" PL
+```
+
+### **❌ Memory Issues**
+```bash
+# Problem: Memory exceeded
+# Solution: Reduce scenarios or time range
+
+# Instead of large scenarios:
+simulation_range=30
+
+# Use smaller:
+simulation_range=5
+```
+
+### **❌ No Data Found**
+```bash
+# Problem: No data available for specified parameters
+# Solutions:
+# 1. Check if data exists for that month/year
+# 2. Use known good dates:
+
+# Good dates for testing:
+month=3  day=15 year=2019  # March 15, 2019 (Friday)
+month=6  day=10 year=2019  # June 10, 2019 (Monday)
+month=10 day=5  year=2019  # October 5, 2019 (Saturday)
+```
+
+### **❌ S3 Access Issues**
+```bash
+# Problem: Access denied to S3 bucket
+# Solution: Check AWS credentials
+aws sts get-caller-identity  # Check if AWS CLI is configured
+aws s3 ls s3://magisterka/   # Test S3 access
+```
+
+## 💡 **Pro Tips**
+
+### **🚀 Speed Up Development**
+```bash
+# Use small test runs during development
+./run_experiment.sh run-experiment 15 17 30m Manhattan 30s 2 15 2019 yellow "hikima" PL
+
+# Then scale up for production
+./run_experiment.sh run-experiment 10 20 10m Manhattan 30s 10 6 2019 yellow "hikima,maps,linucb" PL
+```
+
+### **📊 Batch Processing**
+```bash
+# Run multiple experiments in sequence
+./run_experiment.sh run-experiment 10 20 10m Manhattan 30s 10 6 2019 green "hikima,maps" PL && \
+./run_experiment.sh run-experiment 10 20 10m Brooklyn 30s 10 6 2019 green "hikima,maps" PL && \
+./run_experiment.sh run-experiment 10 20 10m Queens 30s 10 6 2019 green "hikima,maps" PL
+```
+
+### **💾 Save Results**
+```bash
+# Redirect output to file for later analysis
+./run_experiment.sh run-experiment 10 20 10m Manhattan 30s 10 6 2019 green "hikima,maps" PL | tee experiment_results.log
+```
+
+### **⏱️ Track Execution Time**
+```bash
+# Time your experiments
+time ./run_experiment.sh run-experiment 10 20 10m Manhattan 30s 10 6 2019 green "hikima,maps" PL
+```
+
 ## 📋 **Prerequisites**
 
 1. **AWS Account** with Lambda and S3 access
