@@ -1,6 +1,8 @@
 #!/bin/bash
 
+# 🧪 MAIN EXPERIMENT RUNNER SCRIPT  
 # Enhanced Rideshare Experiment Runner with Detailed Logging
+# This is the PRIMARY script for running rideshare pricing experiments
 set -e
 
 REGION="eu-north-1"

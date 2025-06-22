@@ -1,6 +1,8 @@
 #!/bin/bash
 
+# 🚀 MAIN DEPLOYMENT SCRIPT
 # Unified Lambda Deployment Script for Rideshare Experiments
+# This is the PRIMARY script for deploying both Lambda functions (data ingestion + experiment runner)
 set -e
 
 REGION="eu-north-1"
