@@ -690,9 +690,23 @@ run_unified_experiment() {
         if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
             local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
             local best_method=$(echo "$response_body" | jq -r '.best_method // ""' 2>/dev/null)
+            local s3_key=$(echo "$response_body" | jq -r '.s3_key // ""' 2>/dev/null)
             
             log_result "🆔 Experiment ID: $experiment_id"
             log_result "🏆 Best Method: $best_method"
+            
+            if [[ "$s3_key" != "" && "$s3_key" != "null" ]]; then
+                echo ""
+                log_result "📁 S3 Location: s3://$BUCKET_NAME/$s3_key"
+                
+                # Verify upload to S3
+                log_progress "Verifying S3 upload..."
+                if /usr/local/bin/aws s3 ls "s3://$BUCKET_NAME/$s3_key" --region $REGION > /dev/null 2>&1; then
+                    log_success "✅ File verified in S3"
+                else
+                    log_warning "⚠️  Could not verify file in S3 (may be access issue)"
+                fi
+            fi
             
             echo ""
             log_info "🔍 Auto-analyzing experiment results..."
@@ -794,9 +808,23 @@ run_multi_month_unified() {
         if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
             local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
             local best_method=$(echo "$response_body" | jq -r '.best_method // ""' 2>/dev/null)
+            local s3_key=$(echo "$response_body" | jq -r '.s3_key // ""' 2>/dev/null)
             
             log_result "🆔 Experiment ID: $experiment_id"
             log_result "🏆 Best Method: $best_method"
+            
+            if [[ "$s3_key" != "" && "$s3_key" != "null" ]]; then
+                echo ""
+                log_result "📁 S3 Location: s3://$BUCKET_NAME/$s3_key"
+                
+                # Verify upload to S3
+                log_progress "Verifying S3 upload..."
+                if /usr/local/bin/aws s3 ls "s3://$BUCKET_NAME/$s3_key" --region $REGION > /dev/null 2>&1; then
+                    log_success "✅ File verified in S3"
+                else
+                    log_warning "⚠️  Could not verify file in S3 (may be access issue)"
+                fi
+            fi
             
             echo ""
             log_info "📄 Analysis Command:"
@@ -1132,7 +1160,21 @@ run_with_params() {
         local response_body=$(cat response.json | jq -r '.body // ""' 2>/dev/null)
         if [[ "$response_body" != "" && "$response_body" != "null" ]]; then
             local experiment_id=$(echo "$response_body" | jq -r '.experiment_id // ""' 2>/dev/null)
+            local s3_key=$(echo "$response_body" | jq -r '.s3_key // ""' 2>/dev/null)
+            
             log_result "  🆔 Experiment ID: $experiment_id"
+            
+            if [[ "$s3_key" != "" && "$s3_key" != "null" ]]; then
+                log_result "  📁 S3 Location: s3://$BUCKET_NAME/$s3_key"
+                
+                # Verify upload to S3
+                log_progress "Verifying S3 upload..."
+                if /usr/local/bin/aws s3 ls "s3://$BUCKET_NAME/$s3_key" --region $REGION > /dev/null 2>&1; then
+                    log_success "✅ File verified in S3"
+                else
+                    log_warning "⚠️  Could not verify file in S3 (may be access issue)"
+                fi
+            fi
             
             echo ""
             log_info "📄 Analysis Command:"
