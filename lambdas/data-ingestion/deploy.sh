@@ -125,8 +125,8 @@ aws lambda invoke \
 echo "📄 Test Results:"
 if [[ -f test-output.json ]]; then
     # Parse response for better display
-    local status_code=$(cat test-output.json | jq -r '.statusCode // "unknown"' 2>/dev/null)
-    local response_body=$(cat test-output.json | jq -r '.body // ""' 2>/dev/null)
+    status_code=$(cat test-output.json | jq -r '.statusCode // "unknown"' 2>/dev/null)
+    response_body=$(cat test-output.json | jq -r '.body // ""' 2>/dev/null)
     
     echo "  Status Code: $status_code"
     if [[ "$response_body" != "" && "$response_body" != "null" ]]; then

@@ -18,8 +18,8 @@ mkdir -p lambda-package
 # Install dependencies to package directory
 pip install -r requirements.txt -t lambda-package/
 
-# Copy lambda function
-cp lambda_function.py lambda-package/
+# Copy lambda function (current version)
+cp lambda_function_heavy.py lambda-package/lambda_function.py
 
 # Create zip package
 cd lambda-package
