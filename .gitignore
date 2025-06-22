@@ -333,8 +333,11 @@ notebooks/*.ipynb
 # Lambda build directories
 lambda-layer/
 lambda-package/
+layer-build/
+function-build/
 *lambda-deployment.zip
 *scientific-layer.zip
+*.zip
 
 # Failed pip installation artifacts
 =*
@@ -345,9 +348,9 @@ test-payload.json
 test-output.json
 direct-test.json
 minimal-test.json
+temp_experiment.json
 
 # Lambda function development versions
 lambda_function_*.py
 !lambda_function.py
-!lambda_function_heavy.py
-!lambda_function_minimal.py 
+!lambda_function_heavy.py 
