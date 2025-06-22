@@ -48,7 +48,8 @@ class BipartiteMatchingExperiment:
             logger.error(f"❌ Failed to load data from {s3_key}: {e}")
             raise
     
-    def preprocess_data(self, df: pd.DataFrame, simulation_range: int = 5) -> Dict[str, Any]:
+    def preprocess_data(self, df: pd.DataFrame, simulation_range: int = 5, 
+                       full_day_experiment: bool = False) -> Dict[str, Any]:
         """
         Preprocess rideshare data following Hikima methodology.
         
@@ -82,7 +83,14 @@ class BipartiteMatchingExperiment:
         df['day_of_week'] = df['pickup_datetime'].dt.dayofweek
         
         # Filter for business hours (10:00-20:00 as in Hikima paper)
-        df = df[(df['hour'] >= 10) & (df['hour'] < 20)]
+        # For 24-hour experiments, skip hour filtering
+        if not full_day_experiment:
+            df = df[(df['hour'] >= 10) & (df['hour'] < 20)]
+            logger.info("🕐 Filtered for business hours (10:00-20:00)")
+            time_range = "10:00-20:00"
+        else:
+            logger.info("🌙 Running 24-hour experiment (00:00-23:59)")
+            time_range = "00:00-23:59"
         
         # Load real taxi zones data
         if self.taxi_zones_df is None:
@@ -129,32 +137,72 @@ class BipartiteMatchingExperiment:
         
         # Create time-based scenarios following Hikima methodology
         scenarios = []
-        for i in range(simulation_range):
-            # Hikima uses 5-minute intervals, simulate different time periods
-            hour_offset = i * 2  # Different 2-hour periods
-            target_hour = 10 + (hour_offset % 10)  # Within 10:00-20:00 range
-            
-            # Filter data for specific time period
-            time_filtered = df_sample[
-                (df_sample['hour'] >= target_hour) & 
-                (df_sample['hour'] < target_hour + 2)
+        
+        if not full_day_experiment:
+            # Standard business hours experiment (10:00-20:00)
+            for i in range(simulation_range):
+                hour_offset = i * 2  # Different 2-hour periods
+                target_hour = 10 + (hour_offset % 10)  # Within 10:00-20:00 range
+                
+                time_filtered = df_sample[
+                    (df_sample['hour'] >= target_hour) & 
+                    (df_sample['hour'] < target_hour + 2)
+                ]
+                
+                if len(time_filtered) == 0:
+                    time_filtered = df_sample.head(100)
+                
+                demand_factor = random.uniform(0.8, 1.2)
+                supply_factor = random.uniform(0.8, 1.2)
+                
+                scenarios.append({
+                    'scenario_id': i,
+                    'demand_factor': demand_factor,
+                    'supply_factor': supply_factor,
+                    'target_hour': target_hour,
+                    'time_period': f"{target_hour:02d}:00-{target_hour+2:02d}:00",
+                    'data_sample': time_filtered.reset_index(drop=True)
+                })
+        else:
+            # 24-hour experiment - create scenarios for different time periods
+            time_periods = [
+                (0, 6, "Night (00:00-06:00)"),
+                (6, 10, "Early Morning (06:00-10:00)"),
+                (10, 14, "Morning Rush (10:00-14:00)"),
+                (14, 18, "Afternoon (14:00-18:00)"),
+                (18, 22, "Evening Rush (18:00-22:00)"),
+                (22, 24, "Late Night (22:00-24:00)")
             ]
             
-            if len(time_filtered) == 0:
-                time_filtered = df_sample.head(100)  # Fallback
-            
-            # Hikima-style demand/supply variation
-            demand_factor = random.uniform(0.8, 1.2)  # More realistic variation
-            supply_factor = random.uniform(0.8, 1.2)
-            
-            scenarios.append({
-                'scenario_id': i,
-                'demand_factor': demand_factor,
-                'supply_factor': supply_factor,
-                'target_hour': target_hour,
-                'time_period': f"{target_hour:02d}:00-{target_hour+2:02d}:00",
-                'data_sample': time_filtered.reset_index(drop=True)
-            })
+            for i, (start_hour, end_hour, period_name) in enumerate(time_periods[:simulation_range]):
+                time_filtered = df_sample[
+                    (df_sample['hour'] >= start_hour) & 
+                    (df_sample['hour'] < end_hour)
+                ]
+                
+                if len(time_filtered) == 0:
+                    time_filtered = df_sample.head(100)
+                
+                # Different demand/supply patterns for different times of day
+                if "Rush" in period_name:
+                    demand_factor = random.uniform(1.2, 1.8)  # Higher demand during rush
+                    supply_factor = random.uniform(0.8, 1.1)  # Lower supply during rush
+                elif "Night" in period_name or "Late" in period_name:
+                    demand_factor = random.uniform(0.3, 0.7)  # Lower demand at night
+                    supply_factor = random.uniform(0.5, 0.8)  # Lower supply at night
+                else:
+                    demand_factor = random.uniform(0.8, 1.2)  # Normal variation
+                    supply_factor = random.uniform(0.8, 1.2)
+                
+                scenarios.append({
+                    'scenario_id': i,
+                    'demand_factor': demand_factor,
+                    'supply_factor': supply_factor,
+                    'target_hour': start_hour,
+                    'time_period': f"{start_hour:02d}:00-{end_hour:02d}:00",
+                    'period_name': period_name,
+                    'data_sample': time_filtered.reset_index(drop=True)
+                })
         
         return {
             'original_size': len(df),
@@ -162,8 +210,10 @@ class BipartiteMatchingExperiment:
             'scenarios': scenarios,
             'preprocessing_time': datetime.now().isoformat(),
             'hikima_compliant': True,
-            'business_hours_only': True,
-            'borough_based': True
+            'business_hours_only': not full_day_experiment,
+            'borough_based': True,
+            'time_range': time_range,
+            'experiment_duration': "24_hours" if full_day_experiment else "business_hours"
         }
     
     def load_taxi_zones_data(self):
@@ -342,7 +392,9 @@ class BipartiteMatchingExperiment:
     
     def run_experiment(self, vehicle_type: str, year: int, month: int,
                       place: str = "Manhattan", simulation_range: int = 5,
-                      acceptance_function: str = 'PL') -> Dict[str, Any]:
+                      acceptance_function: str = 'PL', full_day_experiment: bool = False,
+                      multi_day_experiment: bool = False, start_day: int = 1, 
+                      end_day: int = 1) -> Dict[str, Any]:
         """
         Run Hikima-compliant rideshare experiment.
         
@@ -364,8 +416,31 @@ class BipartiteMatchingExperiment:
         
         try:
             # Load and preprocess data using Hikima methodology
-            df = self.load_data_from_s3(vehicle_type, year, month)
-            preprocessed = self.preprocess_data(df, simulation_range)
+            if multi_day_experiment:
+                # Multi-day experiment: aggregate data from multiple days
+                all_day_data = []
+                for day in range(start_day, end_day + 1):
+                    try:
+                        daily_df = self.load_data_from_s3(vehicle_type, year, month)
+                        # Filter for specific day
+                        daily_df['pickup_datetime'] = pd.to_datetime(daily_df['pickup_datetime'])
+                        daily_df = daily_df[daily_df['pickup_datetime'].dt.day == day]
+                        if len(daily_df) > 0:
+                            all_day_data.append(daily_df)
+                            logger.info(f"📅 Loaded {len(daily_df)} records for day {day}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not load data for day {day}: {e}")
+                
+                if all_day_data:
+                    df = pd.concat(all_day_data, ignore_index=True)
+                    logger.info(f"📊 Combined {len(df)} records from {len(all_day_data)} days")
+                else:
+                    raise ValueError(f"No data found for days {start_day}-{end_day}")
+            else:
+                # Single day experiment
+                df = self.load_data_from_s3(vehicle_type, year, month)
+            
+            preprocessed = self.preprocess_data(df, simulation_range, full_day_experiment)
             
             # Run experiments on all scenarios using real data
             scenario_results = []
@@ -534,6 +609,12 @@ def lambda_handler(event, context):
         simulation_range = event.get('simulation_range', 5)
         acceptance_function = event.get('acceptance_function', 'PL')
         
+        # New parameters for 24-hour and multi-day experiments
+        full_day_experiment = event.get('full_day_experiment', False)
+        multi_day_experiment = event.get('multi_day_experiment', False)
+        start_day = event.get('start_day', 1)
+        end_day = event.get('end_day', 1)
+        
         # Run experiment
         experiment = BipartiteMatchingExperiment()
         results = experiment.run_experiment(
@@ -542,7 +623,11 @@ def lambda_handler(event, context):
             month=month,
             place=place,
             simulation_range=simulation_range,
-            acceptance_function=acceptance_function
+            acceptance_function=acceptance_function,
+            full_day_experiment=full_day_experiment,
+            multi_day_experiment=multi_day_experiment,
+            start_day=start_day,
+            end_day=end_day
         )
         
         return {
