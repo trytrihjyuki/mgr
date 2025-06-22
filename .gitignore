@@ -327,4 +327,27 @@ trec_data/
 
 # Analysis notebooks with outputs
 analysis/*.ipynb
-notebooks/*.ipynb 
+notebooks/*.ipynb
+
+# ===== Lambda Development Artifacts =====
+# Lambda build directories
+lambda-layer/
+lambda-package/
+*lambda-deployment.zip
+*scientific-layer.zip
+
+# Failed pip installation artifacts
+=*
+
+# Lambda test files
+*-test.json
+test-payload.json
+test-output.json
+direct-test.json
+minimal-test.json
+
+# Lambda function development versions
+lambda_function_*.py
+!lambda_function.py
+!lambda_function_heavy.py
+!lambda_function_minimal.py 
