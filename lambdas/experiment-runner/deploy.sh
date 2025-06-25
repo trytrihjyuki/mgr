@@ -2,6 +2,13 @@
 
 # Professional AWS Lambda Deployment with Lambda Layers
 # This separates dependencies from business logic (best practice)
+
+# Check for Docker
+if ! command -v docker &> /dev/null; then
+    echo "❌ Docker is not installed or not running. Please install and start Docker to continue."
+    exit 1
+fi
+
 set -e
 
 FUNCTION_NAME="rideshare-experiment-runner"
@@ -17,54 +24,64 @@ echo "📋 Region: $REGION"
 # Clean up any existing artifacts
 rm -rf layer-build function-build *.zip
 
-# Step 1: Build Lambda Layer with dependencies
+# Step 1: Build Lambda Layer with dependencies using Docker
 echo ""
-echo "===== STEP 1: Building Lambda Layer ====="
-mkdir -p layer-build/python
+echo "===== STEP 1: Building Lambda Layer using Docker ====="
 
-echo "📦 Installing scientific packages for Lambda Layer..."
-pip install pandas>=1.5.0 numpy>=1.21.0 -t layer-build/python/ \
-    --platform manylinux2014_x86_64 \
-    --only-binary=:all: \
-    --no-cache-dir \
-    --upgrade
+# Create Dockerfile for building the layer
+cat > Dockerfile.layer << EOF
+FROM public.ecr.aws/lambda/python:3.9
 
-echo "🧹 Cleaning layer package..."
-cd layer-build/python
+# Create a directory for the layer
+RUN mkdir -p /tmp/layer/python
 
-# Remove unnecessary files from layer
-find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-find . -name "*.pyc" -delete 2>/dev/null || true
-find . -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
-find . -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
+# Install dependencies into the layer directory
+RUN pip install pandas numpy scipy networkx pyproj geopy pulp -t /tmp/layer/python --no-cache-dir
 
-# Remove numpy source directories (the root cause of import issues)
-rm -rf numpy/core/src/ 2>/dev/null || true
-rm -rf numpy/distutils/ 2>/dev/null || true
-rm -rf numpy/f2py/src/ 2>/dev/null || true
-rm -rf numpy/random/src/ 2>/dev/null || true
+# Install zip utility
+RUN yum install -y zip
 
-cd ../..
+# Perform aggressive cleaning to reduce size
+RUN find /tmp/layer/python -type d -name "tests" -exec rm -rf {} +
+RUN find /tmp/layer/python -type d -name "test" -exec rm -rf {} +
+RUN find /tmp/layer/python -type d -name "__pycache__" -exec rm -rf {} +
+RUN find /tmp/layer/python -name "*.pyc" -delete
+RUN find /tmp/layer/python -type d -name "*.dist-info" -exec rm -rf {} +
+RUN find /tmp/layer/python -type d -name "*.egg-info" -exec rm -rf {} +
+RUN find /tmp/layer/python -name "*.so" -type f -exec strip {} \;
 
-# Create layer zip
-echo "📦 Creating layer ZIP..."
-cd layer-build
-zip -r9 ../scientific-layer.zip . -q
-cd ..
+# Zip the layer
+RUN cd /tmp/layer && zip -r /tmp/scientific-layer.zip .
+EOF
+
+# Build the Docker image
+echo "📦 Building Docker image for layer..."
+docker build -t lambda-layer-builder -f Dockerfile.layer .
+
+# Run the Docker container and copy the layer zip out
+echo "📦 Creating layer ZIP from Docker container..."
+docker run --rm --entrypoint "" -v "$(pwd)":/aws lambda-layer-builder cp /tmp/scientific-layer.zip /aws/scientific-layer.zip
 
 LAYER_SIZE=$(du -h scientific-layer.zip | cut -f1)
-echo "📏 Layer size: $LAYER_SIZE"
+echo "📏 Layer size: $LAYER_SIZE (built in a clean Linux environment)"
 
-# Step 2: Deploy Lambda Layer
+# Clean up Docker artifacts
+rm Dockerfile.layer
+docker rmi lambda-layer-builder
+
+# Step 2: Upload Layer to S3 and Deploy Lambda Layer
 echo ""
-echo "===== STEP 2: Deploying Lambda Layer ====="
+echo "===== STEP 2: Deploying Lambda Layer via S3 ====="
 
-echo "📤 Publishing Lambda Layer..."
+echo "📤 Uploading layer ZIP to S3..."
+aws s3 cp scientific-layer.zip s3://$BUCKET_NAME/lambda-layers/scientific-layer.zip
+
+echo "📤 Publishing Lambda Layer from S3..."
 LAYER_VERSION_ARN=$(aws lambda publish-layer-version \
     --layer-name $LAYER_NAME \
-    --zip-file fileb://scientific-layer.zip \
+    --content S3Bucket=$BUCKET_NAME,S3Key=lambda-layers/scientific-layer.zip \
     --compatible-runtimes python3.9 \
-    --description "Scientific packages (pandas, numpy) for rideshare experiments" \
+    --description "Scientific packages (pandas, numpy, scipy, etc.)" \
     --region $REGION \
     --query LayerVersionArn \
     --output text)
@@ -76,17 +93,13 @@ echo ""
 echo "===== STEP 3: Building Lambda Function ====="
 mkdir -p function-build
 
-echo "📥 Installing function dependencies..."
-# Install additional dependencies needed for pricing methods
-pip install boto3>=1.26.0 networkx>=2.8.0 pyproj>=3.4.0 geopy>=2.3.0 pulp>=2.7.0 scipy>=1.9.0 -t function-build/ --no-deps --quiet
+# No dependencies needed here, they are all in the layer.
+# The function package will only contain our source code.
 
-# Copy the clean pricing benchmark implementation
-echo "📋 Copying pricing benchmark implementation..."
+# Copy the clean pricing benchmark implementation and the pricing_methods package
+echo "📋 Copying pricing benchmark implementation and source code..."
 cp lambda_function.py function-build/lambda_function.py
-
-# Copy the pricing methods source code
-echo "📋 Copying pricing methods source code..."
-cp -r ../../src function-build/
+cp -r ../../src/pricing_methods function-build/
 
 # Clean function package
 cd function-build
@@ -115,6 +128,9 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/de
         --function-name $FUNCTION_NAME \
         --zip-file fileb://function.zip \
         --region $REGION
+    
+    echo "⏳ Waiting for function update to complete..."
+    aws lambda wait function-updated --function-name $FUNCTION_NAME --region $REGION
     
     echo "🔗 Attaching Lambda Layer..."
     # Update function configuration to use the layer
@@ -180,6 +196,7 @@ aws lambda invoke \
         "scenario": "comprehensive_benchmark"
     }' \
     --region $REGION \
+    --cli-binary-format raw-in-base64-out \
     test-output.json
 
 echo "📄 Test output:"

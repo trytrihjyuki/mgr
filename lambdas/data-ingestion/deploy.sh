@@ -45,6 +45,9 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION > /de
         --zip-file fileb://lambda-deployment.zip \
         --region $REGION
     
+    echo "⏳ Waiting for function update to complete..."
+    aws lambda wait function-updated --function-name $FUNCTION_NAME --region $REGION
+    
     # Update function configuration for bulk operations
     echo "⚙️  Updating function configuration for bulk operations..."
     aws lambda update-function-configuration \

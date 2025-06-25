@@ -29,9 +29,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import our pricing methods
-import sys
-sys.path.append('/var/task/src')
-
 from pricing_methods import HikimaMinMaxCostFlow, MAPS, LinUCB, LinearProgram
 from pricing_methods.base_method import PricingResult
 

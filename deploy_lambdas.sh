@@ -13,7 +13,7 @@ EXPERIMENT_RUNNER_FUNCTION="rideshare-experiment-runner"
 echo "🚀 Deploying Rideshare Experiment Infrastructure"
 echo "================================================"
 
-# Check AWS CLI installation
+# Check AWS CLI installationq
 check_aws_cli() {
     if ! command -v aws &> /dev/null; then
         echo "❌ AWS CLI is not installed. Please install it first."
@@ -146,6 +146,7 @@ test_deployment() {
             "month": 3,
             "limit": 10
         }' \
+        --cli-binary-format raw-in-base64-out \
         --region $REGION \
         test-ingestion-output.json
     
@@ -169,6 +170,7 @@ test_deployment() {
             "simulation_range": 2,
             "acceptance_function": "PL"
         }' \
+        --cli-binary-format raw-in-base64-out \
         --region $REGION \
         test-experiment-output.json
     
