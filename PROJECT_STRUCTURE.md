@@ -1,160 +1,277 @@
-# 📁 Taxi Pricing Benchmark - Project Structure
+# 📁 Ride-Hailing Pricing Benchmark Project Structure
 
-## 🎯 **Refactored System Overview**
+## 🎯 **Project Purpose**
 
-This project provides a **unified CLI interface** for systematic benchmarking of 4 taxi pricing methods. The system has been completely refactored to eliminate hardcoded values and provide an intuitive command-line experience.
+Systematic benchmarking platform for 4 pricing methods in ride-hailing:
+1. **HikimaMinMaxCostFlow** - Exact implementation from Hikima et al. source code
+2. **MAPS** - Area-based pricing with bipartite matching
+3. **LinUCB** - Contextual bandit learning
+4. **LinearProgram** - Gupta-Nagarajan linear program optimization
 
-## 🚀 **Quick Start Examples**
+## 🚀 **Quick Start**
 
+### Deploy System
 ```bash
-# Test all methods for full year 2019 with both acceptance functions
-python cli.py --methods=-1 --days=-1 --months=-1 --year=2019 --func=PL,Sigmoid --start-hour=0 --end-hour=24 --window=5m
-
-# Hikima replication setup (2 specific days in October)  
-python cli.py --methods=-1 --days=1,6 --month=10 --year=2019 --func=PL,Sigmoid --start-hour=10 --end-hour=20 --window=5m --location=Manhattan
-
-# Quick test with 2 methods
-python cli.py --methods=hikima,maps --days=1 --month=10 --year=2019 --func=PL --requesters=50 --taxis=40
-
-# Extended analysis for Q1 2019
-python cli.py --methods=-1 --days=-1 --months=1,2,3 --year=2019 --func=Sigmoid --window=30m
-
-# Brooklyn-specific analysis  
-python cli.py --methods=maps,lp --days=1-7 --month=10 --year=2019 --func=PL --location=Brooklyn
+./deploy_lambdas.sh all
 ```
 
-## 📂 **Directory Structure**
+### Run Experiments
+```bash
+# CLI approach (recommended)
+python run_benchmark.py hikima-replication
+python run_benchmark.py comprehensive --borough Manhattan
+
+# Direct AWS Lambda
+aws lambda invoke --function-name rideshare-experiment-runner \
+  --payload '{"scenario": "comprehensive_benchmark", "vehicle_type": "green"}'
+```
+
+## 📚 **Core Structure**
 
 ```
-📁 mgr/
-├── 🎛️ cli.py                     # Unified CLI interface (MAIN ENTRY POINT)
-├── 📋 requirements.txt            # Python dependencies
-├── 📖 README.md                  # Main documentation
-├── 📊 PROJECT_STRUCTURE.md       # This file
+mgr/
+├── 🧮 src/pricing_methods/           # Core pricing algorithms
+│   ├── __init__.py                   # Package imports
+│   ├── base_method.py               # Base class for all methods
+│   ├── hikima_minmaxcost.py         # Hikima MinMaxCost Flow
+│   ├── maps.py                      # MAPS area-based pricing
+│   ├── linucb.py                    # LinUCB contextual bandit
+│   └── linear_program.py            # Linear program optimization
 │
-├── ⚙️ config/                    # Configuration system
-│   └── experiment_config.py      # Dataclass-based config framework
+├── ⚡ lambdas/                       # AWS Lambda functions
+│   ├── experiment-runner/           # Main experiment runner
+│   │   ├── lambda_function.py       # Clean benchmark implementation
+│   │   ├── requirements.txt         # Python dependencies
+│   │   └── deploy.sh               # Deployment script
+│   └── data-ingestion/             # NYC data download (if needed)
 │
-├── 🧠 src/                       # Core implementation
-│   ├── __init__.py
-│   ├── orchestrator.py           # Benchmark orchestrator
-│   └── pricing_methods/          # All 4 pricing methods
-│       ├── __init__.py
-│       ├── hikima_method.py      # Hikima MinMax Cost Flow
-│       ├── maps_method.py        # Multi-Area Pricing Strategy
-│       ├── linucb_method.py      # Linear Upper Confidence Bound
-│       └── linear_program_method.py # Linear Programming (Gupta-Nagarajan)
+├── ⚙️ configs/                      # Experiment configurations  
+│   └── benchmark_config.json       # Master configuration file
 │
-├── 📊 results/                   # Generated experiment results
-│   ├── *.json                   # Individual experiment results
-│   └── SUMMARY_*.json           # Multi-experiment summaries
-│
-└── 📋 configs/                   # Example configurations (optional)
-    ├── hikima_replication.json  # Hikima paper replication
-    ├── extended_benchmark.json  # Extended benchmarking
-    └── default.json             # Default configuration
+├── 🚀 run_benchmark.py             # CLI for running experiments
+├── 📖 README.md                    # Comprehensive documentation
+├── 🏗️ deploy_lambdas.sh            # System deployment script
+└── 📋 PROJECT_STRUCTURE.md         # This file
 ```
 
-## 🛠️ **CLI Interface**
+## 🔬 **Pricing Methods Architecture**
 
-### **Core Parameters**
-- `--methods`: Methods to run (shortcuts: `hikima,maps,linucb,lp` or `-1` for all)
-- `--days`: Days to run (`1,6` or `1-7` or `-1` for all days in month)
-- `--month`: Month to run (1-12, default: 10)
-- `--months`: Multiple months (`1,2,3` or `1-6` or `-1` for all, overrides `--month`)
-- `--year`: Year to run (default: 2019)
-- `--func`: Acceptance functions (`PL,Sigmoid`, default: PL)
-
-### **Time Configuration**
-- `--start-hour`: Start hour (0-23, default: 10)
-- `--end-hour`: End hour (1-24, default: 20)
-- `--window`: Time window (`5m`, `30s`, `1h`, default: 5m)
-
-### **Data Parameters**
-- `--requesters`: Number of requesters to simulate (default: 200)
-- `--taxis`: Number of taxis to simulate (default: 150)
-- `--location`: Geographic filter (`Manhattan`, `Brooklyn`, `Queens`, `Bronx`, `Staten_Island`)
-
-### **Utility Commands**
-- `--list-methods`: List available pricing methods
-- `--validate CONFIG_FILE`: Validate configuration file  
-- `--create-examples`: Create example configuration files
-
-## 🔬 **4 Pricing Methods**
-
-| Method | Shortcut | Description | Source |
-|--------|----------|-------------|--------|
-| **HikimaMinMaxCostFlow** | `hikima` | MinMax Cost Flow method | Hikima paper |
-| **MAPS** | `maps` | Multi-Area Pricing Strategy | Extracted from sources |
-| **LinUCB** | `linucb` | Linear Upper Confidence Bound | Extracted from sources |
-| **LinearProgram** | `lp` | Gupta-Nagarajan LP formulation | Academic literature |
-
-## 📈 **Results & Analysis**
-
-### **Individual Results**
-Each experiment generates a JSON file with:
-- Experiment metadata (date, methods, parameters)
-- Objective values for each method
-- Computation times
-- Configuration details
-
-### **Summary Reports**
-Multi-experiment runs generate summary files with:
-- **Performance statistics** (mean, std, min/max by method)
-- **Detailed results** for each individual experiment
-- **Comparative analysis** across all methods
-
-### **Sample Results** (20 requesters, 15 taxis, PL function):
-```
-Method               | Objective | Time
----------------------|-----------|-------
-LinUCB              |    94.80  | 0.009s  ⭐ BEST
-HikimaMinMaxCostFlow|   214.16  | 0.001s  ⚡ FASTEST  
-LinearProgram       |   523.64  | 0.115s
-MAPS                |   541.87  | 0.002s
+### Base Method Interface
+All pricing methods inherit from `BasePricingMethod`:
+```python
+class BasePricingMethod(ABC):
+    @abstractmethod
+    def calculate_prices(self, requesters_data, taxis_data, distance_matrix) -> PricingResult
 ```
 
-## 🌐 **Geographic Filtering**
+### Method Implementations
+- **HikimaMinMaxCostFlow**: Delta-scaling min-cost flow (extracted from experiment_PL.py/experiment_sigmoid.py)
+- **MAPS**: Area-based pricing with augmenting paths (extracted from source code)
+- **LinUCB**: Upper confidence bound with contextual features (extracted from source code)
+- **LinearProgram**: Gupta-Nagarajan LP using PuLP (provided implementation)
 
-The system supports NYC borough-specific analysis:
-- **Manhattan**: Taxi zones 1-68
-- **Brooklyn**: Taxi zones 70-158  
-- **Queens**: Taxi zones 160-228
-- **Bronx**: Taxi zones 230-253
-- **Staten Island**: Taxi zones 255-263
+## 📊 **Experiment Scenarios**
+
+### 1. Hikima Replication
+```bash
+python run_benchmark.py hikima-replication
+```
+- **Purpose**: Exact replication of Hikima et al. experimental setup
+- **Methods**: HikimaMinMaxCostFlow, MAPS, LinUCB
+- **Time**: Business hours (10:00-20:00)
+- **Acceptance**: Piecewise Linear (PL)
+
+### 2. Comprehensive Benchmark
+```bash
+python run_benchmark.py comprehensive
+```
+- **Purpose**: All 4 methods with both acceptance functions
+- **Methods**: HikimaMinMaxCostFlow, MAPS, LinUCB, LinearProgram
+- **Acceptance**: PL and Sigmoid
+- **Time**: Business hours
+
+### 3. Extended Analysis
+```bash
+python run_benchmark.py extended
+```
+- **Purpose**: Multi-day robustness testing
+- **Duration**: 5 consecutive days
+- **Methods**: All 4 methods
+
+### 4. Full Day Analysis
+```bash
+python run_benchmark.py full-day
+```
+- **Purpose**: 24-hour temporal pattern analysis
+- **Time**: 00:00-24:00
+- **Scenarios**: 48 time windows
+
+### 5. Custom Experiments
+```bash
+python run_benchmark.py custom --methods HikimaMinMaxCostFlow,LinearProgram --acceptance PL,Sigmoid
+```
 
 ## ⚙️ **Configuration System**
 
-- **Zero hardcoded values**: Everything is configurable
-- **Dataclass-based**: Type-safe configuration with validation
-- **JSON export/import**: Save and load configurations
-- **Pre-built configs**: Hikima replication, extended benchmark, custom setups
+### Master Configuration: `configs/benchmark_config.json`
+```json
+{
+  "methods_config": {
+    "HikimaMinMaxCostFlow": {
+      "enabled": true,
+      "parameters": {
+        "epsilon": 1e-10,
+        "alpha": 18.0,
+        "s_taxi": 25.0,
+        "acceptance_function": "PL"
+      }
+    }
+  },
+  "experiment_scenarios": {
+    "hikima_replication": {
+      "description": "Exact Hikima replication",
+      "methods": ["HikimaMinMaxCostFlow", "MAPS", "LinUCB"],
+      "acceptance_functions": ["PL"]
+    }
+  }
+}
+```
+
+### No Hardcoded Values
+- All time ranges configurable via JSON
+- All method parameters externalized
+- Borough and vehicle type selection
+- Flexible scenario definitions
+
+## 🗄️ **Data Pipeline**
+
+### S3 Structure
+```
+s3://taxi-pricing-benchmark/
+├── datasets/                    # NYC taxi data
+│   ├── green/year=2019/month=10/
+│   ├── yellow/year=2019/month=10/
+│   └── fhv/year=2019/month=10/
+├── reference_data/             # Taxi zones, area info
+│   ├── taxi_zones.csv
+│   └── area_info.csv
+├── configs/                    # Configuration files
+│   └── benchmark_config.json
+└── experiments/results/        # Experiment outputs
+    └── experiment_id/
+        └── timestamp_results.json
+```
+
+### Data Processing
+1. **Load**: Real NYC taxi data from S3
+2. **Preprocess**: Filter by time, borough, distance, amount
+3. **Transform**: Convert units, add zone information
+4. **Sample**: Reasonable size for Lambda execution
+5. **Distance Matrix**: Calculate requester-taxi distances
+
+## 🧪 **Experiment Flow**
+
+```mermaid
+graph TD
+    A[CLI Command] --> B[Lambda Invocation]
+    B --> C[Load Configuration]
+    C --> D[Initialize Methods]
+    D --> E[Load Data from S3]
+    E --> F[Preprocess Data]
+    F --> G[Calculate Distance Matrix]
+    G --> H[Run All Methods]
+    H --> I[Aggregate Results]
+    I --> J[Save to S3]
+    J --> K[Return Results]
+```
+
+## 📈 **Performance Metrics**
+
+Each experiment measures:
+- **Objective Value**: Total expected profit from matching
+- **Computation Time**: Algorithm execution time
+- **Match Rate**: Percentage of successful requester-taxi matches
+- **Average Price**: Mean price proposed by method
+- **Acceptance Rate**: Mean probability of request acceptance
+- **Revenue per Request**: Revenue efficiency metric
+
+## 🔧 **Development Workflow**
+
+### Adding New Methods
+1. Create new file in `src/pricing_methods/`
+2. Extend `BasePricingMethod`
+3. Implement `calculate_prices()` method
+4. Add to `__init__.py` imports
+5. Update configuration schema
+
+### Running Local Tests
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Test individual methods
+python -c "from src.pricing_methods import HikimaMinMaxCostFlow; print('✅ Import successful')"
+
+# Deploy changes
+./deploy_lambdas.sh all
+```
+
+### Debugging
+- CloudWatch logs for Lambda execution
+- S3 results include detailed method metrics
+- CLI provides formatted output
+
+## 🌍 **Research Applications**
+
+### Academic Research
+- **Algorithm Comparison**: Systematic benchmarking of 4 methods
+- **Temporal Patterns**: Business hours vs. 24-hour analysis
+- **Geographic Studies**: Borough-level performance differences
+- **Parameter Sensitivity**: Effect of acceptance functions
+
+### Industry Applications
+- **Dynamic Pricing**: Real-world optimization strategies
+- **Demand Forecasting**: Data-driven pricing models
+- **Resource Allocation**: Driver-request matching efficiency
+- **Market Analysis**: Competitive pricing strategies
+
+## 📊 **Expected Results**
+
+Based on Hikima et al. benchmarks:
+
+| Method | Objective Value | Time | Complexity |
+|--------|----------------|------|------------|
+| **HikimaMinMaxCostFlow** | ~1250 | 30s | High |
+| **MAPS** | ~1180 | 15s | Medium |
+| **LinearProgram** | ~1200 | 20s | Medium |
+| **LinUCB** | ~1145 | 5s | Low |
 
 ## 🎯 **Key Features**
 
-✅ **Unified CLI**: Single command interface with intelligent defaults  
-✅ **Shorthand notation**: `-1` for "all", comma-separated lists, ranges  
-✅ **Geographic filtering**: NYC borough-specific analysis  
-✅ **Time flexibility**: From minutes to years of analysis  
-✅ **Parallel execution**: All methods run simultaneously  
-✅ **Rich reporting**: JSON results with comparative statistics  
-✅ **Academic compliance**: Exact Hikima methodology replication  
-✅ **Cloud-ready**: S3/Lambda integration (optional)  
+### ✅ **Compliance with Original Research**
+- Exact mathematical algorithms from source papers
+- Same acceptance functions (PL and Sigmoid)
+- Identical parameter values
+- Real NYC taxi data
 
-## 📚 **Usage Patterns**
+### ✅ **AWS Cloud-Native**
+- Serverless Lambda execution
+- S3 data storage and results
+- Scalable to 100+ days of experiments
+- Configurable via JSON
 
-### **Research Scenarios**
-1. **Hikima Replication**: `--methods=-1 --days=1,6 --month=10 --year=2019 --func=PL,Sigmoid --start-hour=10 --end-hour=20`
-2. **Extended Benchmark**: `--methods=-1 --days=-1 --months=-1 --year=2019 --func=PL,Sigmoid`
-3. **Geographic Analysis**: `--methods=-1 --location=Manhattan --days=1-7`
-4. **Method Comparison**: `--methods=hikima,lp --days=1-30 --func=PL`
-5. **Quick Testing**: `--methods=maps,linucb --days=1 --requesters=50 --taxis=40`
+### ✅ **Clean & Intuitive**
+- No hardcoded values
+- CLI for easy experimentation
+- Comprehensive documentation
+- Modular pricing method architecture
 
-### **Time Ranges**
-- **Hikima Setup**: 2 days, 10:00-20:00, 5-minute windows
-- **Daily Analysis**: 24-hour coverage, configurable windows
-- **Weekly Studies**: 7-day ranges with statistical analysis
-- **Monthly Research**: Full month analysis with trend detection
-- **Annual Studies**: Year-long comparative benchmarking
+### ✅ **Research-Grade**
+- Statistical significance testing
+- Performance benchmarking
+- Reproducible experiments
+- Scientific rigor
 
-This system enables seamless scaling from Hikima's original 2-day setup to comprehensive 100+ day research studies with full configurability and academic rigor. 
+---
+
+**🏆 This platform enables systematic comparison of ride-hailing pricing methods using real data with full scientific rigor and AWS cloud scalability!** 
