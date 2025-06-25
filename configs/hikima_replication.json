@@ -1,4 +1,4 @@
-{
+git {
   "experiment_name": "hikima_replication_experiment",
   "experiment_description": "Exact replication of Hikima et al. experimental setup",
   "experiment_version": "1.0.0",
