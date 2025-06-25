@@ -230,6 +230,12 @@ class HikimaMinMaxCostFlow(BasePricingMethod):
                 cost_matrix[i, n + j] = -w_matrix[i, j]
                 cost_matrix[n + j, i] = w_matrix[i, j]
         
+        # Initialize excess and potential
+        excess = np.zeros(total_nodes)
+        excess[n + m] = n
+        excess[n + m + 1] = -n
+        potential = np.zeros(total_nodes)
+        
         for i in range(n):
             G.add_edge(n + m, i)
             G.add_edge(i, n + m)
@@ -252,11 +258,6 @@ class HikimaMinMaxCostFlow(BasePricingMethod):
         cap_matrix[n + m, n + m + 1] = n
         cost_matrix[n + m, n + m + 1] = 0
         cost_matrix[n + m + 1, n + m] = 0
-        
-        excess = np.zeros(total_nodes)
-        excess[n + m] = n
-        excess[n + m + 1] = -n
-        potential = np.zeros(total_nodes)
         
         # Run simplified delta-scaling for sigmoid
         delta = n

@@ -1,4 +1,4 @@
-git# Ride-Hailing Pricing Methods Benchmark Platform
+# Ride-Hailing Pricing Methods Benchmark Platform
 
 A comprehensive AWS-based platform for systematically benchmarking 4 pricing methods for ride-hailing platforms using real NYC taxi data.
 

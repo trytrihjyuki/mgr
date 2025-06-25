@@ -76,13 +76,17 @@ echo ""
 echo "===== STEP 3: Building Lambda Function ====="
 mkdir -p function-build
 
-echo "📥 Installing minimal dependencies for function..."
-# Only install boto3 for the function (pandas/numpy come from layer)
-pip install boto3>=1.26.0 -t function-build/ --no-deps --quiet
+echo "📥 Installing function dependencies..."
+# Install additional dependencies needed for pricing methods
+pip install boto3>=1.26.0 networkx>=2.8.0 pyproj>=3.4.0 geopy>=2.3.0 pulp>=2.7.0 scipy>=1.9.0 -t function-build/ --no-deps --quiet
 
-# Copy the sophisticated Hikima implementation (NO CHANGES TO LOGIC)
-echo "📋 Copying sophisticated Hikima implementation..."
-cp lambda_function_heavy.py function-build/lambda_function.py
+# Copy the clean pricing benchmark implementation
+echo "📋 Copying pricing benchmark implementation..."
+cp lambda_function.py function-build/lambda_function.py
+
+# Copy the pricing methods source code
+echo "📋 Copying pricing methods source code..."
+cp -r ../../src function-build/
 
 # Clean function package
 cd function-build
@@ -137,7 +141,7 @@ else
         --timeout 900 \
         --memory-size 1024 \
         --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
-        --description "Sophisticated Hikima rideshare experiment runner" \
+        --description "Pricing methods benchmark experiment runner (4 methods)" \
         --region $REGION
 fi
 
@@ -157,25 +161,23 @@ echo "✅ Timeout: 15 minutes"
 echo ""
 echo "📋 Architecture:"
 echo "   📦 Lambda Layer: pandas, numpy (compiled for Linux)"
-echo "   🧠 Lambda Function: sophisticated Hikima implementation"
+echo "   🧠 Lambda Function: 4 pricing methods benchmark system"
 echo "   🔗 Clean separation of concerns"
 
 # Test the function
 echo ""
 echo "===== TESTING ====="
-echo "🧪 Testing sophisticated Hikima implementation..."
+echo "🧪 Testing pricing methods benchmark system..."
 
 aws lambda invoke \
     --function-name $FUNCTION_NAME \
     --payload '{
         "vehicle_type": "green",
         "year": 2019,
-        "month": 3,
-        "place": "Manhattan",
-        "simulation_range": 3,
-        "acceptance_function": "PL",
-        "start_hour": 15,
-        "end_hour": 17
+        "month": 10,
+        "day": 1,
+        "borough": "Manhattan",
+        "scenario": "comprehensive_benchmark"
     }' \
     --region $REGION \
     test-output.json
@@ -185,7 +187,7 @@ cat test-output.json && echo
 
 # Check if successful
 if grep -q '"statusCode": 200' test-output.json; then
-    echo "✅ SUCCESS: Sophisticated Hikima implementation working!"
+    echo "✅ SUCCESS: Pricing methods benchmark system working!"
 else
     echo "❌ Test failed - checking output above"
 fi
@@ -193,4 +195,4 @@ fi
 rm test-output.json
 
 echo ""
-echo "🎯 Ready for sophisticated rideshare experiments with real Hikima algorithms!" 
+echo "🎯 Ready for systematic pricing method benchmarks with 4 algorithms!" 
