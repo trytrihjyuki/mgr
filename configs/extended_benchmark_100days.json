@@ -1,6 +1,6 @@
 {
-  "experiment_name": "taxi_pricing_benchmark",
-  "experiment_description": "Systematic benchmarking of 4 taxi pricing methods",
+  "experiment_name": "extended_benchmark_100days",
+  "experiment_description": "Extended benchmarking over 100 days",
   "experiment_version": "1.0.0",
   "data_config": {
     "s3_bucket": "taxi-pricing-benchmark",
@@ -50,10 +50,10 @@
   "time_config": {
     "start_hour": 0,
     "end_hour": 24,
-    "time_window_minutes": 5,
-    "start_date": "2019-10-01",
-    "end_date": "2019-10-02",
-    "simulation_scenarios": 100,
+    "time_window_minutes": 30,
+    "start_date": "2019-01-01",
+    "end_date": "2019-04-11",
+    "simulation_scenarios": 1000,
     "monte_carlo_iterations": 100
   },
   "hikima_config": {
