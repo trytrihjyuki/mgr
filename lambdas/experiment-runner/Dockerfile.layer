@@ -1,0 +1,41 @@
+FROM public.ecr.aws/lambda/python:3.9
+
+# Create layer directory
+RUN mkdir -p /tmp/layer/python
+RUN mkdir -p /tmp/layer/lib
+
+# Install only essential packages to stay within layer size limits
+RUN pip install --upgrade pip
+
+# Install minimal numpy and pandas only
+RUN pip install --no-cache-dir numpy==1.21.6 -t /tmp/layer/python
+RUN pip install --no-cache-dir pandas==1.5.3 -t /tmp/layer/python
+RUN pip install --no-cache-dir boto3==1.26.137 -t /tmp/layer/python
+
+# Aggressive cleanup to reduce size
+RUN find /tmp/layer/python -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.pyc" -delete 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+
+# Remove unnecessary files
+RUN find /tmp/layer/python -name "*.a" -delete 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.la" -delete 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.so" -exec strip {} + 2>/dev/null || true
+
+# Remove documentation and examples
+RUN find /tmp/layer/python -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "docs" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.md" -delete 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.txt" -delete 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.rst" -delete 2>/dev/null || true
+
+# Test numpy installation
+RUN cd /tmp/layer && python3 -c "import sys; sys.path.insert(0, '/tmp/layer/python'); import numpy as np; print('✅ Numpy test successful:', np.__version__)"
+
+# Create layer zip with maximum compression
+RUN cd /tmp/layer && zip -r9 /tmp/scientific-layer.zip .
+

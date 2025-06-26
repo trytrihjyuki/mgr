@@ -12,26 +12,86 @@ and saves results back to S3 for analysis.
 """
 
 import json
-import boto3
-import pandas as pd
-import numpy as np
+import os
+import sys
+import logging
+import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
-import logging
-import os
-import io
-import traceback
-# Use simple geodesic distance calculation instead of geopy
-# from geopy.distance import geodesic
 import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import our pricing methods
-from src.pricing_methods import HikimaMinMaxCostFlow, MAPS, LinUCB, LinearProgram
-from src.pricing_methods.base_method import PricingResult
+def test_imports():
+    """Test all imports to help debug dependency issues."""
+    test_results = {}
+    
+    # Test basic imports
+    try:
+        import boto3
+        test_results['boto3'] = f"✅ Success: {boto3.__version__}"
+    except Exception as e:
+        test_results['boto3'] = f"❌ Failed: {str(e)}"
+    
+    # Test numpy specifically
+    try:
+        import numpy as np
+        test_results['numpy'] = f"✅ Success: {np.__version__}"
+        # Test basic numpy operations
+        arr = np.array([1, 2, 3])
+        test_results['numpy_ops'] = f"✅ Array test: {arr}"
+    except Exception as e:
+        test_results['numpy'] = f"❌ Failed: {str(e)}"
+        test_results['numpy_traceback'] = traceback.format_exc()
+    
+    # Test pandas
+    try:
+        import pandas as pd
+        test_results['pandas'] = f"✅ Success: {pd.__version__}"
+    except Exception as e:
+        test_results['pandas'] = f"❌ Failed: {str(e)}"
+    
+    # Test other scientific packages
+    for package_name in ['scipy', 'networkx', 'geopy', 'pulp']:
+        try:
+            if package_name == 'scipy':
+                import scipy
+                test_results[package_name] = f"✅ Success: {scipy.__version__}"
+            elif package_name == 'networkx':
+                import networkx as nx
+                test_results[package_name] = f"✅ Success: {nx.__version__}"
+            elif package_name == 'geopy':
+                import geopy
+                test_results[package_name] = f"✅ Success: {geopy.__version__}"
+            elif package_name == 'pulp':
+                import pulp
+                test_results[package_name] = f"✅ Success: Available"
+        except Exception as e:
+            test_results[package_name] = f"❌ Failed: {str(e)}"
+    
+    # Test system info
+    test_results['python_version'] = sys.version
+    test_results['python_path'] = sys.path
+    test_results['environment'] = dict(os.environ)
+    
+    return test_results
+
+# Now try the main imports with better error handling
+try:
+    import boto3
+    import pandas as pd
+    import numpy as np
+    import io
+    # Import our pricing methods only if numpy works
+    from src.pricing_methods import HikimaMinMaxCostFlow, MAPS, LinUCB, LinearProgram
+    from src.pricing_methods.base_method import PricingResult
+    IMPORTS_SUCCESSFUL = True
+except Exception as e:
+    logger.error(f"❌ Import error: {e}")
+    logger.error(traceback.format_exc())
+    IMPORTS_SUCCESSFUL = False
 
 
 class PricingBenchmarkRunner:
@@ -40,8 +100,11 @@ class PricingBenchmarkRunner:
     """
     
     def __init__(self):
+        if not IMPORTS_SUCCESSFUL:
+            raise RuntimeError("Critical imports failed")
+        
         self.s3_client = boto3.client('s3')
-        self.bucket_name = os.environ.get('S3_BUCKET', 'taxi-pricing-benchmark')
+        self.bucket_name = os.environ.get('S3_BUCKET', 'magisterka')
         
         # Initialize pricing methods
         self.pricing_methods = {}
@@ -71,7 +134,8 @@ class PricingBenchmarkRunner:
             "data_config": {
                 "min_trip_distance": 0.001,
                 "min_total_amount": 0.001,
-                "distance_conversion_factor": 1.60934
+                "distance_conversion_factor": 1.60934,
+                "max_sample_size": 1000
             },
             "time_config": {
                 "business_hours": {"start_hour": 10, "end_hour": 20}
@@ -486,17 +550,66 @@ def lambda_handler(event, context):
         "scenario": "comprehensive_benchmark",
         "config_name": "benchmark_config.json"
     }
+    
+    Or for testing:
+    {
+        "test_mode": "numpy_only"
+    }
     """
     logger.info(f"📥 Received event: {json.dumps(event, default=str)}")
     
-    runner = PricingBenchmarkRunner()
-    results = runner.run_experiment(event)
-    
-    # This is returned to the client (e.g., run_benchmark.py)
-    return {
-        'statusCode': 200,
-        'body': json.dumps(results, default=str),
-        'headers': {
-            'Content-Type': 'application/json'
+    # Handle test mode
+    if event.get('test_mode') == 'numpy_only':
+        logger.info("🧪 Running numpy test mode")
+        test_results = test_imports()
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'test_mode': 'numpy_only',
+                'results': test_results,
+                'imports_successful': IMPORTS_SUCCESSFUL
+            }, default=str),
+            'headers': {
+                'Content-Type': 'application/json'
+            }
         }
-    } 
+    
+    # Check if imports were successful before proceeding
+    if not IMPORTS_SUCCESSFUL:
+        error_details = test_imports()
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': 'Import failure - cannot proceed',
+                'details': error_details
+            }, default=str),
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
+    
+    try:
+        runner = PricingBenchmarkRunner()
+        results = runner.run_experiment(event)
+        
+        # This is returned to the client (e.g., run_benchmark.py)
+        return {
+            'statusCode': 200,
+            'body': json.dumps(results, default=str),
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ Lambda handler error: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }),
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        } 
