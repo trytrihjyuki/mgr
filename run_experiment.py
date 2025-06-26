@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Ride-Hailing Pricing Benchmark CLI
+Ride-Hailing Pricing Benchmark CLI - Hikima Environment Replication
 
-A systematic benchmarking framework for comparing pricing methods in ride-hailing.
-Supports the exact Hikima experimental setup and extended analysis.
+A systematic benchmarking framework that recreates the exact experimental 
+environment from Hikima et al. with time windows and full dataset processing.
 
 Examples:
-    # Hikima replication (2 days, business hours)
-    python run_experiment.py --year=2019 --month=10 --days=1,6 --func=PL,Sigmoid --methods=MinMaxCostFlow,MAPS,LinUCB
+    # Exact Hikima replication (10-20h, 5min windows, 120 scenarios per day)
+    python run_experiment.py --year=2019 --month=10 --days=1,6 --hours=10,20 --window=5 --func=PL,Sigmoid --methods=MinMaxCostFlow,MAPS,LinUCB
 
-    # Comprehensive analysis (all 4 methods)
-    python run_experiment.py --year=2019 --month=10 --days=1 --func=PL --methods=MinMaxCostFlow,MAPS,LinUCB,LP
+    # All 4 methods with Hikima setup
+    python run_experiment.py --year=2019 --month=10 --days=1 --hours=10,20 --window=5 --func=PL --methods=MinMaxCostFlow,MAPS,LinUCB,LP
 
-    # Extended multi-day analysis
-    python run_experiment.py --year=2019 --month=10 --days=1,2,3,4,5,6,7 --func=PL,Sigmoid --methods=LP,MAPS,LinUCB
-    
-    # Multi-month experiment
-    python run_experiment.py --year=2019 --months=3,4,5 --days=1,15 --func=PL --methods=LP,MAPS
+    # Custom time range (24h, 30min windows, 48 scenarios per day)
+    python run_experiment.py --year=2019 --month=10 --days=1 --hours=0,24 --window=30 --func=PL,Sigmoid --methods=LP,MAPS,LinUCB
+
+    # Multi-day multi-month experiment
+    python run_experiment.py --year=2019 --months=10,11 --days=1,6,11,16 --hours=10,20 --window=5 --func=PL --methods=LP,MAPS
 """
 
 import argparse
@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 class RideHailingBenchmarkCLI:
     """
     Command-line interface for ride-hailing pricing benchmarks.
+    Recreates exact Hikima et al. experimental environment.
     """
     
     def __init__(self, config_path: str = "configs/experiment_config.json"):
@@ -50,7 +51,9 @@ class RideHailingBenchmarkCLI:
         
         # Generate unique training ID for this experiment run
         self.training_id = f"{self._generate_training_id()}"
+        self.execution_date = datetime.now().strftime('%Y%m%d_%H%M%S')
         logger.info(f"🆔 Training ID: {self.training_id}")
+        logger.info(f"📅 Execution Date: {self.execution_date}")
     
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load experiment configuration."""
@@ -73,45 +76,89 @@ class RideHailingBenchmarkCLI:
         """
         Run the main experiment based on CLI arguments.
         """
-        logger.info("🚀 Starting Ride-Hailing Pricing Benchmark")
+        logger.info("🚀 Starting Ride-Hailing Pricing Benchmark - Hikima Environment")
         logger.info(f"📊 Configuration: {args}")
         
         # Parse and validate arguments
         experiment_params = self._parse_experiment_params(args)
         
-        # Generate experiment plan
-        experiment_plan = self._generate_experiment_plan(experiment_params)
-        logger.info(f"📋 Generated {len(experiment_plan)} experiment(s)")
+        # Generate time-window based experiment plan (Hikima style)
+        experiment_plan = self._generate_time_window_experiment_plan(experiment_params)
+        total_scenarios = sum(len(day_scenarios) for day_scenarios in experiment_plan.values())
+        logger.info(f"📋 Generated {total_scenarios} time-window scenarios across {len(experiment_plan)} days")
         
-        # Execute experiments
+        # Execute experiments by day
         results = []
-        for i, experiment in enumerate(experiment_plan):
-            logger.info(f"🔄 Running experiment {i+1}/{len(experiment_plan)}")
-            logger.info(f"   📅 {experiment['year']}-{experiment['month']:02d}-{experiment['day']:02d}")
-            logger.info(f"   🚗 {experiment['vehicle_type']} | 🏙️ {experiment['borough']}")
-            logger.info(f"   📊 {experiment['acceptance_function']} | 🧮 {experiment['methods']}")
+        day_count = 0
+        for (year, month, day), scenarios in experiment_plan.items():
+            day_count += 1
+            logger.info(f"🔄 Processing day {day_count}/{len(experiment_plan)}: {year}-{month:02d}-{day:02d}")
+            logger.info(f"   📊 {len(scenarios)} time windows × {len(experiment_params['acceptance_functions'])} functions = {len(scenarios) * len(experiment_params['acceptance_functions'])} experiments")
             
-            try:
-                result = self._run_single_experiment(experiment)
-                results.append(result)
-                
-                # Log success
-                if result.get('statusCode') == 200:
-                    body = json.loads(result['body'])
-                    logger.info(f"   ✅ Success: {len(body.get('results', []))} method results")
-                else:
-                    logger.warning(f"   ⚠️ Experiment returned status {result.get('statusCode')}")
+            day_results = []
+            for scenario_idx, scenario in enumerate(scenarios):
+                for func_idx, acceptance_function in enumerate(experiment_params['acceptance_functions']):
+                    experiment_idx = scenario_idx * len(experiment_params['acceptance_functions']) + func_idx + 1
+                    total_day_experiments = len(scenarios) * len(experiment_params['acceptance_functions'])
                     
-            except Exception as e:
-                logger.error(f"   ❌ Experiment failed: {e}")
-                continue
+                    logger.info(f"   🕐 Time window {experiment_idx}/{total_day_experiments}: "
+                               f"{scenario['start_hour']:02d}:{scenario['start_minute']:02d}-"
+                               f"{scenario['end_hour']:02d}:{scenario['end_minute']:02d} | {acceptance_function}")
+                    
+                    try:
+                        # Create experiment payload
+                        experiment_payload = {
+                            'training_id': self.training_id,
+                            'execution_date': self.execution_date,
+                            'year': year,
+                            'month': month,
+                            'day': day,
+                            'scenario_index': scenario_idx,
+                            'time_window': scenario,
+                            'vehicle_type': experiment_params['vehicle_type'],
+                            'borough': experiment_params['borough'],
+                            'acceptance_function': acceptance_function,
+                            'methods': experiment_params['methods'],
+                            'scenario': experiment_params['scenario'],
+                            'config_name': 'experiment_config.json'
+                        }
+                        
+                        result = self._run_single_experiment(experiment_payload)
+                        day_results.append(result)
+                        
+                        # Log success
+                        if result.get('statusCode') == 200:
+                            try:
+                                body = json.loads(result['body'])
+                                if 'body' in body and isinstance(body['body'], str):
+                                    experiment_results = json.loads(body['body'])
+                                    results_array = experiment_results.get('results', [])
+                                else:
+                                    results_array = body.get('results', [])
+                                
+                                logger.info(f"      ✅ Success: {len(results_array)} method results")
+                                if results_array:
+                                    for res in results_array:
+                                        method = res.get('method_name', 'Unknown')
+                                        objective = res.get('objective_value', 0)
+                                        logger.info(f"         📊 {method}: Objective={objective:.2f}")
+                            except Exception as e:
+                                logger.warning(f"      ⚠️ Could not parse results: {e}")
+                        else:
+                            logger.warning(f"      ⚠️ Experiment returned status {result.get('statusCode')}")
+                            
+                    except Exception as e:
+                        logger.error(f"      ❌ Experiment failed: {e}")
+                        continue
+                    
+                    # Add delay between experiments to avoid rate limiting
+                    time.sleep(1)
             
-            # Add delay between experiments to avoid rate limiting
-            if i < len(experiment_plan) - 1:
-                time.sleep(2)
+            results.extend(day_results)
+            logger.info(f"✅ Completed day {year}-{month:02d}-{day:02d}: {len(day_results)} experiments")
         
         # Generate summary
-        summary = self._generate_summary(results, experiment_params)
+        summary = self._generate_summary(results, experiment_params, total_scenarios)
         logger.info("🎉 Benchmark completed!")
         logger.info(f"📊 Summary: {summary['total_experiments']} experiments, "
                    f"{summary['successful_experiments']} successful")
@@ -137,6 +184,21 @@ class RideHailingBenchmarkCLI:
         else:
             params['days'] = [1]  # Default to 1st
         
+        # Parse time range (hours)
+        if args.hours:
+            hour_parts = args.hours.split(',')
+            if len(hour_parts) != 2:
+                raise ValueError("Hours must be specified as 'start,end' (e.g., '10,20')")
+            params['start_hour'] = int(hour_parts[0])
+            params['end_hour'] = int(hour_parts[1])
+        else:
+            # Default to Hikima business hours
+            params['start_hour'] = 10
+            params['end_hour'] = 20
+        
+        # Parse time window duration
+        params['window_minutes'] = args.window if args.window else 5  # Default 5 minutes
+        
         # Parse acceptance functions
         if args.func:
             params['acceptance_functions'] = [f.strip() for f in args.func.split(',')]
@@ -153,7 +215,6 @@ class RideHailingBenchmarkCLI:
         params['vehicle_type'] = getattr(args, 'vehicle_type', 'green')
         params['borough'] = getattr(args, 'borough', 'Manhattan')
         params['scenario'] = getattr(args, 'scenario', 'comprehensive')
-        params['time_range'] = getattr(args, 'time_range', 'business_hours')
         
         # Validate parameters
         self._validate_params(params)
@@ -163,6 +224,17 @@ class RideHailingBenchmarkCLI:
     def _validate_params(self, params: Dict[str, Any]):
         """Validate experiment parameters."""
         config = self.config
+        
+        # Validate time parameters
+        if params['start_hour'] < 0 or params['start_hour'] > 23:
+            raise ValueError(f"Invalid start hour: {params['start_hour']}. Must be 0-23.")
+        if params['end_hour'] < 1 or params['end_hour'] > 24:
+            raise ValueError(f"Invalid end hour: {params['end_hour']}. Must be 1-24.")
+        if params['start_hour'] >= params['end_hour']:
+            raise ValueError(f"Start hour ({params['start_hour']}) must be less than end hour ({params['end_hour']})")
+        
+        if params['window_minutes'] < 1 or params['window_minutes'] > 60:
+            raise ValueError(f"Invalid window minutes: {params['window_minutes']}. Must be 1-60.")
         
         # Validate vehicle types
         valid_vehicle_types = config['data_sources']['supported_vehicle_types']
@@ -189,67 +261,79 @@ class RideHailingBenchmarkCLI:
             if method not in valid_methods:
                 raise ValueError(f"Invalid pricing method: {method}. "
                                f"Supported: {valid_methods}")
-        
-        # Validate time range
-        valid_time_ranges = list(config['temporal_config'].keys())
-        if params['time_range'] not in valid_time_ranges:
-            raise ValueError(f"Invalid time range: {params['time_range']}. "
-                           f"Supported: {valid_time_ranges}")
     
-    def _generate_experiment_plan(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate a list of individual experiments to run."""
-        experiments = []
+    def _generate_time_window_experiment_plan(self, params: Dict[str, Any]) -> Dict[tuple, List[Dict[str, Any]]]:
+        """Generate time-window based experiment plan following Hikima methodology."""
+        plan = {}
         
         for month in params['months']:
             for day in params['days']:
-                for acceptance_function in params['acceptance_functions']:
-                    # Create one experiment per acceptance function
-                    # (methods will be run within the same Lambda call)
-                    experiment = {
-                        'training_id': self.training_id,
-                        'year': params['year'],
-                        'month': month,
-                        'day': day,
-                        'vehicle_type': params['vehicle_type'],
-                        'borough': params['borough'],
-                        'acceptance_function': acceptance_function,
-                        'methods': params['methods'],
-                        'scenario': params['scenario'],
-                        'time_range': params['time_range']
-                    }
-                    experiments.append(experiment)
+                # Generate time windows for this day
+                scenarios = self._generate_time_windows(
+                    params['start_hour'], 
+                    params['end_hour'], 
+                    params['window_minutes']
+                )
+                plan[(params['year'], month, day)] = scenarios
         
-        return experiments
+        return plan
+    
+    def _generate_time_windows(self, start_hour: int, end_hour: int, window_minutes: int) -> List[Dict[str, Any]]:
+        """Generate time windows following Hikima's 5-minute interval approach."""
+        scenarios = []
+        
+        # Calculate total minutes in the time range
+        total_minutes = (end_hour - start_hour) * 60
+        
+        # Generate scenarios every 5 minutes (following Hikima's tt_tmp * 5 approach)
+        for tt_tmp in range(0, total_minutes // 5):
+            tt = tt_tmp * 5  # 5-minute intervals
+            h, m = divmod(tt, 60)
+            
+            start_scenario_hour = start_hour + h
+            start_scenario_minute = m
+            
+            # End time is start + window_minutes + 30 seconds (following Hikima)
+            end_scenario_minute = start_scenario_minute + window_minutes
+            end_scenario_hour = start_scenario_hour
+            
+            # Handle minute overflow
+            if end_scenario_minute >= 60:
+                end_scenario_hour += end_scenario_minute // 60
+                end_scenario_minute = end_scenario_minute % 60
+            
+            # Stop if we exceed the end hour
+            if end_scenario_hour > end_hour or (end_scenario_hour == end_hour and end_scenario_minute > 0):
+                break
+            
+            scenario = {
+                'scenario_index': tt_tmp,
+                'start_hour': start_scenario_hour,
+                'start_minute': start_scenario_minute,
+                'start_second': 0,
+                'end_hour': end_scenario_hour,
+                'end_minute': end_scenario_minute,
+                'end_second': 30,  # Hikima adds 30 seconds
+                'window_minutes': window_minutes
+            }
+            scenarios.append(scenario)
+        
+        return scenarios
     
     def _run_single_experiment(self, experiment: Dict[str, Any]) -> Dict[str, Any]:
-        """Run a single experiment via AWS Lambda."""
-        
-        # Prepare Lambda payload
-        payload = {
-            'training_id': experiment['training_id'],
-            'year': experiment['year'],
-            'month': experiment['month'],
-            'day': experiment['day'],
-            'vehicle_type': experiment['vehicle_type'],
-            'borough': experiment['borough'],
-            'acceptance_function': experiment['acceptance_function'],
-            'methods': experiment['methods'],
-            'scenario': experiment['scenario'],
-            'time_range': experiment['time_range'],
-            'config_name': 'experiment_config.json'
-        }
+        """Run a single time-window experiment via AWS Lambda."""
         
         # Invoke Lambda function
         response = self.lambda_client.invoke(
             FunctionName='rideshare-pricing-benchmark',
             InvocationType='RequestResponse',
-            Payload=json.dumps(payload)
+            Payload=json.dumps(experiment)
         )
         
         # Parse response
         result = {
             'statusCode': response['StatusCode'],
-            'payload': payload,
+            'payload': experiment,
             'response': response
         }
         
@@ -261,15 +345,17 @@ class RideHailingBenchmarkCLI:
         return result
     
     def _generate_summary(self, results: List[Dict[str, Any]], 
-                         params: Dict[str, Any]) -> Dict[str, Any]:
+                         params: Dict[str, Any], total_scenarios: int) -> Dict[str, Any]:
         """Generate experiment summary."""
         successful = [r for r in results if r.get('statusCode') == 200]
         failed = [r for r in results if r.get('statusCode') != 200]
         
         summary = {
             'training_id': self.training_id,
+            'execution_date': self.execution_date,
             'timestamp': datetime.now().isoformat(),
             'experiment_parameters': params,
+            'total_scenarios': total_scenarios,
             'total_experiments': len(results),
             'successful_experiments': len(successful),
             'failed_experiments': len(failed),
@@ -283,8 +369,14 @@ class RideHailingBenchmarkCLI:
             if result.get('body'):
                 try:
                     body = json.loads(result['body'])
-                    if 's3_location' in body:
-                        s3_locations.append(body['s3_location'])
+                    # Handle nested Lambda response structure
+                    if 'body' in body and isinstance(body['body'], str):
+                        experiment_results = json.loads(body['body'])
+                        if 's3_location' in experiment_results:
+                            s3_locations.append(experiment_results['s3_location'])
+                    else:
+                        if 's3_location' in body:
+                            s3_locations.append(body['s3_location'])
                 except:
                     pass
         
@@ -296,21 +388,21 @@ class RideHailingBenchmarkCLI:
 def create_parser() -> argparse.ArgumentParser:
     """Create argument parser for the CLI."""
     parser = argparse.ArgumentParser(
-        description="Ride-Hailing Pricing Benchmark CLI",
+        description="Ride-Hailing Pricing Benchmark CLI - Hikima Environment Replication",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Hikima replication (2 days, PL + Sigmoid)
-  python run_experiment.py --year=2019 --month=10 --days=1,6 --func=PL,Sigmoid --methods=MinMaxCostFlow,MAPS,LinUCB
+  # Exact Hikima replication (10-20h, 5min windows, 120 scenarios per day)
+  python run_experiment.py --year=2019 --month=10 --days=1,6 --hours=10,20 --window=5 --func=PL,Sigmoid --methods=MinMaxCostFlow,MAPS,LinUCB
 
-  # All 4 methods comparison
-  python run_experiment.py --year=2019 --month=10 --days=1 --func=PL --methods=MinMaxCostFlow,MAPS,LinUCB,LP
+  # All 4 methods with Hikima setup
+  python run_experiment.py --year=2019 --month=10 --days=1 --hours=10,20 --window=5 --func=PL --methods=MinMaxCostFlow,MAPS,LinUCB,LP
 
-  # Extended multi-day analysis
-  python run_experiment.py --year=2019 --month=10 --days=1,2,3,4,5,6,7 --func=PL,Sigmoid --methods=LP,MAPS,LinUCB
+  # Custom time range (24h, 30min windows, 48 scenarios per day)
+  python run_experiment.py --year=2019 --month=10 --days=1 --hours=0,24 --window=30 --func=PL,Sigmoid --methods=LP,MAPS,LinUCB
 
-  # Multi-month experiment
-  python run_experiment.py --year=2019 --months=3,4,5 --days=1,15 --func=PL --methods=LP,MAPS
+  # Multi-day multi-month experiment  
+  python run_experiment.py --year=2019 --months=10,11 --days=1,6,11,16 --hours=10,20 --window=5 --func=PL --methods=LP,MAPS
         """
     )
     
@@ -323,11 +415,18 @@ Examples:
     time_group.add_argument('--month', type=int,
                            help='Single month for the experiment (1-12)')
     time_group.add_argument('--months', type=str,
-                           help='Comma-separated months (e.g., "3,4,5")')
+                           help='Comma-separated months (e.g., "10,11,12")')
     
     # Day specification
     parser.add_argument('--days', type=str, required=True,
                        help='Comma-separated days (e.g., "1,6" for Hikima replication)')
+    
+    # Time range specification (Hikima style)
+    parser.add_argument('--hours', type=str, required=True,
+                       help='Start and end hours as "start,end" (e.g., "10,20" for business hours)')
+    
+    parser.add_argument('--window', type=int, default=5,
+                       help='Time window duration in minutes (default: 5 for Hikima replication)')
     
     # Acceptance functions
     parser.add_argument('--func', type=str, required=True,
@@ -350,10 +449,6 @@ Examples:
                        choices=['hikima_replication', 'comprehensive', 'scalability'],
                        help='Experiment scenario (default: comprehensive)')
     
-    parser.add_argument('--time-range', default='business_hours',
-                       choices=['business_hours', 'full_day'],
-                       help='Time range for analysis (default: business_hours)')
-    
     parser.add_argument('--config', default='configs/experiment_config.json',
                        help='Path to experiment configuration file')
     
@@ -370,27 +465,48 @@ def main():
         summary = cli.run_experiment(args)
         
         # Print summary
-        print("\n" + "="*60)
-        print("🎉 EXPERIMENT SUMMARY")
-        print("="*60)
+        print("\n" + "="*80)
+        print("🎉 EXPERIMENT SUMMARY - Hikima Environment Replication")
+        print("="*80)
         print(f"Training ID: {summary['training_id']}")
+        print(f"Execution Date: {summary['execution_date']}")
+        print(f"Total time-window scenarios: {summary['total_scenarios']}")
         print(f"Total experiments: {summary['total_experiments']}")
         print(f"Successful: {summary['successful_experiments']}")
         print(f"Failed: {summary['failed_experiments']}")
         
         if summary['s3_locations']:
-            print("\n📁 Results stored in S3:")
-            for location in summary['s3_locations']:
+            print(f"\n📁 Results stored in S3 ({len(summary['s3_locations'])} files):")
+            for i, location in enumerate(summary['s3_locations'][:5]):  # Show first 5
                 print(f"  {location}")
+            if len(summary['s3_locations']) > 5:
+                print(f"  ... and {len(summary['s3_locations']) - 5} more files")
         
         print("\n🔍 Use the following pattern to find all results:")
-        pattern = summary['s3_pattern'].format(
-            vehicle_type=args.vehicle_type,
-            acceptance_function="*",
-            year=args.year,
-            month="*"
-        )
-        print(f"  s3://magisterka/{pattern}")
+        try:
+            pattern_template = summary['s3_pattern']
+            # Replace placeholders with wildcards for search pattern
+            pattern_template = pattern_template.replace('{execution_date}', '*')
+            pattern_template = pattern_template.replace('{training_id}', '*')
+            
+            if 'month:02d' in pattern_template:
+                pattern = pattern_template.replace('{month:02d}', '*').replace('{day:02d}', '*').format(
+                    vehicle_type=args.vehicle_type,
+                    acceptance_function="*",
+                    year=args.year
+                )
+            else:
+                pattern = pattern_template.format(
+                    vehicle_type=args.vehicle_type,
+                    acceptance_function="*",
+                    year=args.year,
+                    month="*",
+                    day="*"
+                )
+            print(f"  s3://magisterka/{pattern}")
+        except Exception as e:
+            logger.error(f"❌ Failed to generate S3 pattern: {e}")
+            print(f"  Check S3 bucket manually: s3://magisterka/experiments/")
         
     except KeyboardInterrupt:
         logger.info("\n🛑 Experiment interrupted by user")

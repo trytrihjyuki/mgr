@@ -1,1 +1,0 @@
-{"statusCode": 200, "body": "{\"experiment_id\": \"benchmark_974098372_20250626\", \"training_id\": \"974098372\", \"status\": \"failed\", \"error\": \"An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.\", \"timestamp\": \"2025-06-26T14:24:56.841707\"}", "headers": {"Content-Type": "application/json"}}

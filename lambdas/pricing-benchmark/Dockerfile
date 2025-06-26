@@ -1,3 +1,4 @@
+# Use the official AWS Lambda Python base image
 FROM public.ecr.aws/lambda/python:3.9
 
 # Install system dependencies for scientific packages
