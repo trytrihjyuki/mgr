@@ -39,7 +39,8 @@ This system implements and compares four pricing algorithms:
 
 4. **Deploy the Lambda function**:
    ```bash
-   ./deploy_lambdas.sh
+   cd lambdas/pricing-benchmark
+   ./deploy.sh
    ```
 
 ## 🎮 Basic Usage

@@ -275,8 +275,8 @@ aws sts get-caller-identity
 # Navigate to Lambda directory
 cd lambdas/pricing-benchmark
 
-# Build and deploy using the deployment script
-./deploy_lambdas.sh
+# Deploy using the single deployment script
+./deploy.sh
 
 # Or deploy manually with proper configuration
 zip -r pricing-benchmark.zip . -x "*.git*" "*.DS_Store*" "*.pyc*" "__pycache__/*"
