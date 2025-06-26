@@ -5,8 +5,9 @@
 # This is the PRIMARY script for deploying both Lambda functions (data ingestion + experiment runner)
 set -e
 
-REGION="eu-north-1"
-BUCKET_NAME="magisterka"
+REGION="${REGION:-eu-north-1}"
+BUCKET_NAME="${BUCKET_NAME:-magisterka}"
+export REGION BUCKET_NAME
 DATA_INGESTION_FUNCTION="nyc-data-ingestion"
 EXPERIMENT_RUNNER_FUNCTION="rideshare-experiment-runner"
 

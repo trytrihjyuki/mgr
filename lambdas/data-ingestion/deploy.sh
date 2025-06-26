@@ -4,8 +4,9 @@
 set -e
 
 FUNCTION_NAME="nyc-data-ingestion"
-REGION="eu-north-1"
-BUCKET_NAME="magisterka"
+REGION="${REGION:-eu-north-1}"
+BUCKET_NAME="${BUCKET_NAME:-magisterka}"
+export REGION BUCKET_NAME
 
 echo "🚀 Deploying Enhanced Data Ingestion Lambda Function"
 

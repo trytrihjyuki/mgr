@@ -13,8 +13,9 @@ set -e
 
 FUNCTION_NAME="rideshare-experiment-runner"
 LAYER_NAME="scientific-packages-layer"
-REGION="eu-north-1"
-BUCKET_NAME="magisterka"
+REGION="${REGION:-eu-north-1}"
+BUCKET_NAME="${BUCKET_NAME:-magisterka}"
+export REGION BUCKET_NAME
 
 echo "🚀 Professional Lambda Deployment with Lambda Layers"
 echo "📋 Function: $FUNCTION_NAME"
@@ -57,7 +58,8 @@ RUN find /tmp/layer/python -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/n
 RUN find /tmp/layer/python -name "*.so" -type f -exec strip {} \; 2>/dev/null || true
 
 # Remove any problematic source directories
-RUN find /tmp/layer/python -name "numpy" -type d -path "*/site-packages/*" -prune -o -name "numpy" -type d -exec rm -rf {} + 2>/dev/null || true
+# RUN find /tmp/layer/python -name "numpy" -type d -path "*/site-packages/*" -prune -o -name "numpy" -type d -exec rm -rf {} + 2>/dev/null || true
+# (Disabled) Previously removed numpy packages to reduce size; keep numpy for execution
 
 # Zip the layer
 RUN cd /tmp/layer && zip -r /tmp/scientific-layer.zip .

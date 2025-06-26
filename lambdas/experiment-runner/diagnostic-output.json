@@ -1,1 +1,0 @@
-{"errorMessage": "local variable 'os' referenced before assignment", "errorType": "UnboundLocalError", "requestId": "a548339e-432e-4294-9ad3-313b9648802e", "stackTrace": ["  File \"/var/task/test_lambda.py\", line 63, in lambda_handler\n    \"working_directory\": os.getcwd(),\n"]}
