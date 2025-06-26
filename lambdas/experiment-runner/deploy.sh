@@ -35,20 +35,29 @@ FROM public.ecr.aws/lambda/python:3.9
 # Create a directory for the layer
 RUN mkdir -p /tmp/layer/python
 
-# Install dependencies into the layer directory
-RUN pip install pandas numpy scipy networkx pyproj geopy pulp -t /tmp/layer/python --no-cache-dir
+# Install system dependencies
+RUN yum update -y && yum install -y gcc gcc-c++ make
+
+# Install dependencies into the layer directory with specific versions that work well
+RUN pip install --upgrade pip
+RUN pip install numpy==1.21.6 -t /tmp/layer/python --no-cache-dir
+RUN pip install pandas==1.5.3 -t /tmp/layer/python --no-cache-dir
+RUN pip install scipy==1.9.3 networkx==2.8.8 pyproj==3.4.1 geopy==2.3.0 pulp==2.7.0 -t /tmp/layer/python --no-cache-dir
 
 # Install zip utility
 RUN yum install -y zip
 
 # Perform aggressive cleaning to reduce size
-RUN find /tmp/layer/python -type d -name "tests" -exec rm -rf {} +
-RUN find /tmp/layer/python -type d -name "test" -exec rm -rf {} +
-RUN find /tmp/layer/python -type d -name "__pycache__" -exec rm -rf {} +
-RUN find /tmp/layer/python -name "*.pyc" -delete
-RUN find /tmp/layer/python -type d -name "*.dist-info" -exec rm -rf {} +
-RUN find /tmp/layer/python -type d -name "*.egg-info" -exec rm -rf {} +
-RUN find /tmp/layer/python -name "*.so" -type f -exec strip {} \;
+RUN find /tmp/layer/python -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.pyc" -delete 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+RUN find /tmp/layer/python -name "*.so" -type f -exec strip {} \; 2>/dev/null || true
+
+# Remove any problematic source directories
+RUN find /tmp/layer/python -name "numpy" -type d -path "*/site-packages/*" -prune -o -name "numpy" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Zip the layer
 RUN cd /tmp/layer && zip -r /tmp/scientific-layer.zip .
@@ -96,15 +105,18 @@ mkdir -p function-build
 # No dependencies needed here, they are all in the layer.
 # The function package will only contain our source code.
 
-# Copy the clean pricing benchmark implementation and the pricing_methods package
+# Copy the clean pricing benchmark implementation and the src folder
 echo "📋 Copying pricing benchmark implementation and source code..."
 cp lambda_function.py function-build/lambda_function.py
-cp -r ../../src/pricing_methods function-build/
+cp -r ../../src function-build/
 
-# Clean function package
+# Clean function package and remove any potential numpy conflicts
 cd function-build
 find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find . -name "*.pyc" -delete 2>/dev/null || true
+# Remove any potential numpy-related directories or files that might conflict
+find . -name "*numpy*" -type d -exec rm -rf {} + 2>/dev/null || true
+find . -name "*numpy*" -type f -delete 2>/dev/null || true
 cd ..
 
 # Create function zip
@@ -137,7 +149,7 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION 2>/de
     aws lambda update-function-configuration \
         --function-name $FUNCTION_NAME \
         --layers "$LAYER_VERSION_ARN" \
-        --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
+        --environment Variables="{S3_BUCKET=$BUCKET_NAME,PYTHONPATH=/opt/python:/var/task}" \
         --timeout 900 \
         --memory-size 1024 \
         --runtime python3.9 \
@@ -156,7 +168,7 @@ else
         --layers "$LAYER_VERSION_ARN" \
         --timeout 900 \
         --memory-size 1024 \
-        --environment Variables="{S3_BUCKET=$BUCKET_NAME}" \
+        --environment Variables="{S3_BUCKET=$BUCKET_NAME,PYTHONPATH=/opt/python:/var/task}" \
         --description "Pricing methods benchmark experiment runner (4 methods)" \
         --region $REGION
 fi

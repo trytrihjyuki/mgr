@@ -21,16 +21,17 @@ import logging
 import os
 import io
 import traceback
-import pyproj
-from geopy.distance import geodesic
+# Use simple geodesic distance calculation instead of geopy
+# from geopy.distance import geodesic
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import our pricing methods
-from pricing_methods import HikimaMinMaxCostFlow, MAPS, LinUCB, LinearProgram
-from pricing_methods.base_method import PricingResult
+from src.pricing_methods import HikimaMinMaxCostFlow, MAPS, LinUCB, LinearProgram
+from src.pricing_methods.base_method import PricingResult
 
 
 class PricingBenchmarkRunner:
@@ -41,7 +42,6 @@ class PricingBenchmarkRunner:
     def __init__(self):
         self.s3_client = boto3.client('s3')
         self.bucket_name = os.environ.get('S3_BUCKET', 'taxi-pricing-benchmark')
-        self.geod = pyproj.Geod(ellps='WGS84')
         
         # Initialize pricing methods
         self.pricing_methods = {}
@@ -233,17 +233,25 @@ class PricingBenchmarkRunner:
         requester_coords = self._get_coordinates(requesters_data, zones_df)
         taxi_coords = self._get_coordinates(taxis_data, zones_df)
         
-        # Calculate distances using geodesic distance
+        # Calculate distances using simple haversine formula
         for i in range(n):
             for j in range(m):
-                try:
-                    distance_km = geodesic(requester_coords[i], taxi_coords[j]).kilometers
-                    distance_matrix[i, j] = distance_km
-                except Exception:
-                    # Fallback to simple Euclidean distance
-                    lat_diff = requester_coords[i][0] - taxi_coords[j][0]
-                    lon_diff = requester_coords[i][1] - taxi_coords[j][1]
-                    distance_matrix[i, j] = np.sqrt(lat_diff**2 + lon_diff**2) * 111  # Rough km conversion
+                # Use haversine formula for distance calculation
+                lat1, lon1 = requester_coords[i]
+                lat2, lon2 = taxi_coords[j]
+                
+                # Convert to radians
+                lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+                
+                # Haversine formula
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+                c = 2 * np.arcsin(np.sqrt(a))
+                r = 6371  # Earth's radius in kilometers
+                distance_km = r * c
+                
+                distance_matrix[i, j] = distance_km
         
         return distance_matrix
     
@@ -277,9 +285,11 @@ class PricingBenchmarkRunner:
         Run the main pricing benchmark experiment.
         """
         start_time = datetime.now()
-        experiment_id = f"benchmark_{start_time.strftime('%Y%m%d_%H%M%S')}"
+        # Generate a unique ID for this training/experiment run
+        training_id = f"{random.randint(100_000_000, 999_999_999)}"
+        experiment_id = f"benchmark_{training_id}_{start_time.strftime('%Y%m%d')}"
         
-        logger.info(f"🧪 Starting experiment: {experiment_id}")
+        logger.info(f"🧪 Starting experiment: {experiment_id} (Training ID: {training_id})")
         
         try:
             # Load configuration
@@ -381,6 +391,7 @@ class PricingBenchmarkRunner:
             # Aggregate results
             experiment_results = {
                 'experiment_id': experiment_id,
+                'training_id': training_id,
                 'timestamp': start_time.isoformat(),
                 'configuration': {
                     'vehicle_type': vehicle_type,
@@ -414,6 +425,7 @@ class PricingBenchmarkRunner:
             logger.error(traceback.format_exc())
             return {
                 'experiment_id': experiment_id,
+                'training_id': training_id,
                 'status': 'failed',
                 'error': str(e),
                 'timestamp': start_time.isoformat()
@@ -434,10 +446,15 @@ class PricingBenchmarkRunner:
         }
     
     def _save_results_to_s3(self, results: Dict[str, Any]):
-        """Save experiment results to S3."""
+        """Save experiment results to S3 using the new structured path."""
         try:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            s3_key = f"experiments/results/{results['experiment_id']}/{timestamp}_results.json"
+            config = results['configuration']
+            training_id = results['training_id']
+            
+            # Create the structured S3 path
+            s3_key = (f"experiments/type={config['vehicle_type']}"
+                      f"/year={config['year']}/month={config['month']:02d}"
+                      f"/day={config['day']:02d}/{training_id}.json")
             
             results_json = json.dumps(results, indent=2, default=str)
             
@@ -475,6 +492,7 @@ def lambda_handler(event, context):
     runner = PricingBenchmarkRunner()
     results = runner.run_experiment(event)
     
+    # This is returned to the client (e.g., run_benchmark.py)
     return {
         'statusCode': 200,
         'body': json.dumps(results, default=str),

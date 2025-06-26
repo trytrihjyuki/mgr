@@ -39,30 +39,37 @@ All methods are extracted from the original research implementations and adapted
 
 ### 2. Run Hikima Replication Experiment
 ```bash
+# Recommended: Use the benchmark script
+python run_benchmark.py hikima-replication --year 2019 --month 10
+
+# Direct Lambda invoke (advanced)
 aws lambda invoke \
   --function-name rideshare-experiment-runner \
+  --cli-binary-format raw-in-base64-out \
   --payload '{
-    "vehicle_type": "green",
-    "year": 2019,
-    "month": 10,
-    "day": 1,
-    "borough": "Manhattan",
-    "scenario": "hikima_replication"
+    "scenario": "hikima_replication", 
+    "vehicle_type": "green", 
+    "year": 2019, 
+    "month": 10
   }' \
   response.json
 ```
 
 ### 3. Run Comprehensive Benchmark
 ```bash
+# Recommended: Use the benchmark script
+python run_benchmark.py comprehensive --borough Manhattan
+
+# Direct Lambda invoke (advanced)
 aws lambda invoke \
   --function-name rideshare-experiment-runner \
+  --cli-binary-format raw-in-base64-out \
   --payload '{
-    "vehicle_type": "green",
-    "year": 2019,
+    "scenario": "comprehensive_benchmark", 
+    "vehicle_type": "green", 
+    "year": 2019, 
     "month": 10,
-    "day": 1,
-    "borough": "Manhattan",
-    "scenario": "comprehensive_benchmark"
+    "borough": "Manhattan"
   }' \
   response.json
 ```

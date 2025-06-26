@@ -37,13 +37,23 @@ class BenchmarkCLI:
                 Payload=json.dumps(payload)
             )
             
-            result = json.loads(response['Payload'].read().decode('utf-8'))
-            
             if response['StatusCode'] == 200:
-                body = json.loads(result['body'])
-                return body
+                result = json.loads(response['Payload'].read().decode('utf-8'))
+
+                # The lambda handler now returns a dict with statusCode and body
+                # The 'body' is a JSON string of the actual results.
+                if 'body' in result:
+                    body = json.loads(result['body'])
+                    if body.get('status') == 'failed':
+                        print(f"❌ Lambda experiment failed: {body.get('error', 'Unknown error')}")
+                        return None
+                    return body
+                else:
+                    # Handle cases where the lambda failed before returning the standard body
+                    print(f"❌ Lambda execution error: {result}")
+                    return None
             else:
-                print(f"❌ Lambda invocation failed: {result}")
+                print(f"❌ Lambda invocation failed with status code {response['StatusCode']}")
                 return None
                 
         except Exception as e:
