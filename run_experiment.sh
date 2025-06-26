@@ -682,7 +682,11 @@ run_unified_experiment() {
     local status_code=$?
     echo ""
     
-    if [[ $status_code -eq 0 ]]; then
+    # Check both AWS CLI success AND Lambda function success
+    local error_message=$(cat response.json | jq -r '.errorMessage // ""' 2>/dev/null || echo "")
+    local error_type=$(cat response.json | jq -r '.errorType // ""' 2>/dev/null || echo "")
+    
+    if [[ $status_code -eq 0 && -z "$error_message" && -z "$error_type" ]]; then
         log_success "🎉 Unified experiment completed!"
         
         # Parse results
@@ -713,19 +717,29 @@ run_unified_experiment() {
             python local-manager/results_manager.py analyze "$experiment_id" | cat
         fi
     else
-        log_error "Unified experiment failed with status code: $status_code"
+        if [[ $status_code -ne 0 ]]; then
+            log_error "AWS CLI command failed with status code: $status_code"
+        else
+            log_error "Lambda function failed: $error_type"
+        fi
         
-        # Check if response file exists and show error details
+        # Show detailed error information
         if [[ -f response.json ]]; then
             echo ""
             log_info "Error details:"
             
-            # Check for timeout indicators in response
-            local error_message=$(cat response.json | jq -r '.errorMessage // ""' 2>/dev/null || echo "")
-            if [[ "$error_message" == *"timed out"* ]] || [[ "$error_message" == *"timeout"* ]] || [[ "$error_message" == *"Task timed out"* ]]; then
+            # Check for specific error types
+            if [[ "$error_type" == "Runtime.ImportModuleError" ]]; then
+                log_error "❌ Import Error: Lambda cannot import required modules"
+                if [[ "$error_message" == *"numpy"* ]]; then
+                    log_error "🔧 Numpy packaging issue detected - needs Lambda layer fix"
+                fi
+            elif [[ "$error_message" == *"timed out"* ]] || [[ "$error_message" == *"timeout"* ]] || [[ "$error_message" == *"Task timed out"* ]]; then
                 log_error "⏰ Lambda function timed out - experiment too large for current setup"
             fi
             
+            # Pretty print the error
+            echo ""
             cat response.json | jq . 2>/dev/null || cat response.json
         else
             log_warning "No response file found - possible network timeout"

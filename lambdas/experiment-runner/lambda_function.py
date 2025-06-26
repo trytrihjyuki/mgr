@@ -135,7 +135,7 @@ class PricingBenchmarkRunner:
                 "min_trip_distance": 0.001,
                 "min_total_amount": 0.001,
                 "distance_conversion_factor": 1.60934,
-                "max_sample_size": 1000
+                "max_sample_size": 200
             },
             "time_config": {
                 "business_hours": {"start_hour": 10, "end_hour": 20}
@@ -246,11 +246,11 @@ class PricingBenchmarkRunner:
         df = df[
             (df.get('trip_distance', 0) > min_distance) &
             (df.get('total_amount', 0) > min_amount)
-        ]
+        ].copy()  # Make a copy to avoid SettingWithCopyWarning
         
         # Time filtering
         if pickup_col:
-            df['hour'] = df[pickup_col].dt.hour
+            df.loc[:, 'hour'] = df[pickup_col].dt.hour
             df = df[(df['hour'] >= start_hour) & (df['hour'] < end_hour)]
         
         # Add zone information
@@ -367,7 +367,7 @@ class PricingBenchmarkRunner:
             vehicle_type = event.get('vehicle_type', 'green')
             year = event.get('year', 2019)
             month = event.get('month', 10)
-            day = event.get('day', 1)
+            day = event.get('day', None)  # Default to None for monthly data
             borough = event.get('borough', 'Manhattan')
             scenario_name = event.get('scenario', 'comprehensive_benchmark')
             
@@ -387,8 +387,12 @@ class PricingBenchmarkRunner:
                 acceptance_functions = event.get('acceptance_functions', ['PL'])
             
             # Load and preprocess data
+            logger.info(f"📥 Loading data for {vehicle_type} {year}-{month:02d}")
             df = self.load_data_from_s3(vehicle_type, year, month, day)
+            logger.info(f"📊 Raw data loaded: {len(df)} records")
+            
             preprocessed = self.preprocess_data(df, config, borough, start_hour, end_hour)
+            logger.info(f"🔄 Data preprocessed: {len(preprocessed['data'])} records")
             
             if len(preprocessed['data']) == 0:
                 raise ValueError("No data available after preprocessing")
@@ -402,7 +406,9 @@ class PricingBenchmarkRunner:
             zones_df = self.load_taxi_zones()
             
             # Calculate distance matrix
+            logger.info(f"🔢 Calculating distance matrix: {len(requesters_data)}x{len(taxis_data)}")
             distance_matrix = self.calculate_distance_matrix(requesters_data, taxis_data, zones_df)
+            logger.info(f"✅ Distance matrix calculated")
             
             # Run experiments for each method and acceptance function
             results = []
@@ -414,13 +420,16 @@ class PricingBenchmarkRunner:
                 
                 for acceptance_function in acceptance_functions:
                     logger.info(f"🔄 Running {method_name} with {acceptance_function} acceptance")
+                    method_start_time = datetime.now()
                     
                     try:
                         # Update method parameters for this acceptance function
                         method = self.pricing_methods[method_name]
                         method.acceptance_function = acceptance_function
                         
-                        # Run the pricing method
+                        # Run the pricing method with timeout protection
+                        logger.info(f"   📊 Data size: {len(requesters_data)} requesters, {len(taxis_data)} taxis")
+                        
                         result = method.calculate_prices(
                             requesters_data=requesters_data,
                             taxis_data=taxis_data,
@@ -444,13 +453,31 @@ class PricingBenchmarkRunner:
                         
                         results.append(result)
                         
+                        method_duration = (datetime.now() - method_start_time).total_seconds()
                         logger.info(f"✅ {method_name} ({acceptance_function}): "
                                   f"Objective={result.objective_value:.2f}, "
-                                  f"Time={result.computation_time:.3f}s")
+                                  f"Time={result.computation_time:.3f}s, "
+                                  f"Total={method_duration:.3f}s")
+                        
+                        # Check if we're approaching Lambda timeout
+                        total_elapsed = (datetime.now() - start_time).total_seconds()
+                        if total_elapsed > 800:  # 13.3 minutes, leave buffer for cleanup
+                            logger.warning(f"⚠️ Approaching Lambda timeout ({total_elapsed:.1f}s), stopping early")
+                            break
                         
                     except Exception as e:
-                        logger.error(f"❌ Error in {method_name} with {acceptance_function}: {e}")
+                        method_duration = (datetime.now() - method_start_time).total_seconds()
+                        logger.error(f"❌ Error in {method_name} with {acceptance_function} after {method_duration:.1f}s: {e}")
                         logger.error(traceback.format_exc())
+                        
+                        # Don't let one method failure stop the entire experiment
+                        continue
+                
+                # Check timeout after each method completes
+                total_elapsed = (datetime.now() - start_time).total_seconds()
+                if total_elapsed > 800:  # 13.3 minutes
+                    logger.warning(f"⚠️ Approaching Lambda timeout ({total_elapsed:.1f}s), stopping experiment")
+                    break
             
             # Aggregate results
             experiment_results = {

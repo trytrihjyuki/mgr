@@ -5,16 +5,15 @@
 # This is the PRIMARY script for deploying both Lambda functions (data ingestion + experiment runner)
 set -e
 
-REGION="${REGION:-eu-north-1}"
-BUCKET_NAME="${BUCKET_NAME:-magisterka}"
-export REGION BUCKET_NAME
+REGION="eu-north-1"
+BUCKET_NAME="magisterka"
 DATA_INGESTION_FUNCTION="nyc-data-ingestion"
 EXPERIMENT_RUNNER_FUNCTION="rideshare-experiment-runner"
 
 echo "🚀 Deploying Rideshare Experiment Infrastructure"
 echo "================================================"
 
-# Check AWS CLI installationq
+# Check AWS CLI installation
 check_aws_cli() {
     if ! command -v aws &> /dev/null; then
         echo "❌ AWS CLI is not installed. Please install it first."
@@ -147,7 +146,6 @@ test_deployment() {
             "month": 3,
             "limit": 10
         }' \
-        --cli-binary-format raw-in-base64-out \
         --region $REGION \
         test-ingestion-output.json
     
@@ -167,11 +165,10 @@ test_deployment() {
             "vehicle_type": "green",
             "year": 2019,
             "month": 3,
-            "day": 1,
-            "borough": "Manhattan",
-            "scenario": "hikima_replication"
+            "place": "Manhattan",
+            "simulation_range": 2,
+            "acceptance_function": "PL"
         }' \
-        --cli-binary-format raw-in-base64-out \
         --region $REGION \
         test-experiment-output.json
     

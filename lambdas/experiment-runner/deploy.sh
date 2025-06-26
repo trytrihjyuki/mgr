@@ -83,6 +83,9 @@ pandas==1.5.3
 scipy==1.9.3
 networkx==2.8.8
 
+# Data processing packages
+pyarrow==10.0.1
+
 # Geospatial packages
 pyproj==3.4.1
 geopy==2.3.0

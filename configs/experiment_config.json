@@ -1,0 +1,149 @@
+{
+  "experiment_framework": {
+    "name": "ride_hailing_pricing_benchmark",
+    "version": "3.0.0",
+    "description": "Systematic benchmarking of pricing methods for ride-hailing platforms"
+  },
+  
+  "data_sources": {
+    "s3_bucket": "magisterka", 
+    "base_paths": {
+      "datasets": "datasets",
+      "experiments": "experiments", 
+      "reference": "reference_data"
+    },
+    "supported_vehicle_types": ["green", "yellow", "fhv"],
+    "supported_boroughs": ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"]
+  },
+  
+  "sampling_strategy": {
+    "method": "configurable",
+    "default_max_records": null,
+    "hikima_max_records": 8000,
+    "random_seed": 42,
+    "preserve_temporal_order": true
+  },
+  
+  "temporal_config": {
+    "time_window_minutes": 5,
+    "business_hours": {
+      "start": 10,
+      "end": 20
+    },
+    "full_day": {
+      "start": 0, 
+      "end": 24
+    }
+  },
+  
+  "acceptance_functions": {
+    "PL": {
+      "name": "Piecewise Linear",
+      "formula": "-2.0/trip_amount * price + 3.0",
+      "parameters": {
+        "c_multiplier": 2.0,
+        "d_constant": 3.0
+      }
+    },
+    "Sigmoid": {
+      "name": "Sigmoid",
+      "formula": "1 - 1/(1 + exp((-price + beta*trip_amount)/(gamma*trip_amount)))",
+      "parameters": {
+        "beta": 1.3,
+        "gamma": 0.16539880833293433
+      }
+    }
+  },
+  
+  "pricing_methods": {
+    "MinMaxCostFlow": {
+      "class_name": "HikimaMinMaxCostFlow", 
+      "display_name": "Hikima et al. MinMaxCost Flow",
+      "enabled": true,
+      "parameters": {
+        "epsilon": 1e-10,
+        "alpha": 18.0,
+        "s_taxi": 25.0
+      }
+    },
+    "MAPS": {
+      "class_name": "MAPS",
+      "display_name": "Area-based Pricing with Matching",
+      "enabled": true,
+      "parameters": {
+        "alpha": 18.0,
+        "s_taxi": 25.0,
+        "s_0_rate": 1.5,
+        "price_discretization_rate": 0.05,
+        "max_matching_distance_km": 2.0
+      }
+    },
+    "LinUCB": {
+      "class_name": "LinUCB",
+      "display_name": "Linear Upper Confidence Bound",
+      "enabled": true,
+      "parameters": {
+        "ucb_alpha": 0.5,
+        "base_price": 5.875,
+        "price_multipliers": [0.6, 0.8, 1.0, 1.2, 1.4]
+      }
+    },
+    "LP": {
+      "class_name": "LinearProgram",
+      "display_name": "Gupta-Nagarajan Linear Program", 
+      "enabled": true,
+      "parameters": {
+        "min_price_factor": 0.5,
+        "max_price_factor": 2.0,
+        "price_grid_size": 10,
+        "solver_timeout": 300
+      }
+    }
+  },
+  
+  "experiment_scenarios": {
+    "hikima_replication": {
+      "description": "Exact replication of Hikima et al. experiment",
+      "time_range": "business_hours",
+      "acceptance_functions": ["PL", "Sigmoid"],
+      "methods": ["MinMaxCostFlow", "MAPS", "LinUCB"],
+      "monte_carlo_iterations": 100,
+      "max_sample_size": 8000
+    },
+    "comprehensive": {
+      "description": "All 4 methods comparison",
+      "time_range": "business_hours", 
+      "acceptance_functions": ["PL", "Sigmoid"],
+      "methods": ["MinMaxCostFlow", "MAPS", "LinUCB", "LP"],
+      "monte_carlo_iterations": 100,
+      "max_sample_size": null
+    },
+    "scalability": {
+      "description": "Large-scale experiments",
+      "time_range": "full_day",
+      "acceptance_functions": ["PL"],
+      "methods": ["MAPS", "LinUCB", "LP"], 
+      "monte_carlo_iterations": 50,
+      "max_sample_size": null
+    }
+  },
+  
+  "aws_deployment": {
+    "lambda_config": {
+      "timeout_seconds": 900,
+      "memory_mb": 3008,
+      "container_image": true,
+      "environment_variables": {
+        "PYTHONPATH": "/var/task",
+        "S3_BUCKET": "magisterka"
+      }
+    },
+    "s3_result_pattern": "experiments/type={vehicle_type}/eval={acceptance_function}/year={year}/month={month:02d}/{training_id}.json"
+  },
+  
+  "validation": {
+    "monte_carlo_iterations": 100,
+    "statistical_tests": ["paired_t_test", "wilcoxon_signed_rank"],
+    "confidence_level": 0.95
+  }
+} 
