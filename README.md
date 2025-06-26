@@ -1,334 +1,203 @@
-# 🚗 Ride-Hailing Pricing Benchmark Framework
+# Ride-Hailing Pricing Experiment System
 
-A systematic benchmarking framework for comparing 4 pricing methods in ride-hailing platforms using real NYC taxi data. This framework is designed to be **parameter-agnostic** with **no hardcoded values**, supporting both Hikima experimental replication and extended analysis.
+A comprehensive experimental framework for evaluating dynamic pricing algorithms in ride-hailing platforms using real NYC taxi data.
 
-## 🎯 **Core Features**
+## 🎯 Overview
 
-- **4 Pricing Methods**: MinMaxCostFlow (Hikima), MAPS, LinUCB, and Linear Program (Gupta-Nagarajan)
-- **No Hardcoded Parameters**: All values configurable via JSON config or CLI arguments
-- **AWS Lambda Container Support**: Handles large dependencies (PuLP, NetworkX, SciPy)
-- **Proper S3 Organization**: Results stored with training IDs for grouping
-- **Flexible Experiments**: Single day to multi-month analysis
-- **Hikima Compliance**: Exact replication of Hikima et al. experimental setup
+This system implements and compares four pricing algorithms:
 
-## 🏗️ **Architecture**
+- **MinMaxCostFlow** - Min-cost flow algorithm with capacity scaling
+- **MAPS** - Area-based pricing with bipartite matching  
+- **LinUCB** - Contextual bandit learning with Upper Confidence Bound
+- **LP** - Gupta-Nagarajan Linear Program optimization
 
-```
-├── 🚀 run_experiment.py              # Main CLI interface
-├── 📋 configs/experiment_config.json # Configuration (no hardcoded values)
-├── ⚡ lambdas/pricing-benchmark/     # AWS Lambda function (container-based)
-│   ├── lambda_function.py           # Main benchmark logic
-│   ├── Dockerfile                   # Container for large dependencies
-│   ├── requirements.txt             # Scientific packages
-│   └── deploy.sh                    # Deployment script
-└── 📊 Results stored in S3          # experiments/type=*/eval=*/year=*/month=*/{training_id}.json
-```
+## 🚀 Quick Start
 
-## 🚀 **Quick Start**
+### Prerequisites
 
-### 1. **Deploy the System**
+- AWS Account with Lambda and S3 access
+- Python 3.8+ with required packages
+- NYC Taxi & Limousine Commission (TLC) data in S3
+
+### Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone <repository-url>
+   cd ride-hailing-pricing
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   pip install -r requirements_aws.txt
+   ```
+
+3. **Configure AWS credentials**:
+   ```bash
+   aws configure
+   ```
+
+4. **Deploy the Lambda function**:
+   ```bash
+   ./deploy_lambdas.sh
+   ```
+
+## 🎮 Basic Usage
+
+### Single Day Experiment
+
+Run pricing experiments for a specific day:
+
 ```bash
-# Deploy Lambda function with container support
-cd lambdas/pricing-benchmark
-./deploy.sh
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=6 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL,Sigmoid \
+  --methods=LP,MinMaxCostFlow,LinUCB,MAPS
 ```
 
-### 2. **Upload Configuration**
+### Multiple Days
+
+Run experiments across multiple days:
+
 ```bash
-# Upload experiment configuration to S3
-aws s3 cp configs/experiment_config.json s3://magisterka/configs/
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --days=1,6,10,15 \
+  --borough=Manhattan --vehicle_type=green \
+  --eval=PL,Sigmoid \
+  --methods=LinUCB,MAPS
 ```
 
-### 3. **Run Experiments**
+### Date Range
 
-#### **Hikima Replication (2 days, business hours)**
+Run experiments for a continuous date range:
+
 ```bash
-python run_experiment.py \
-  --year=2019 --month=10 --days=1,6 \
-  --func=PL,Sigmoid \
-  --methods=MinMaxCostFlow,MAPS,LinUCB
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --start_day=1 --end_day=31 \
+  --borough=Queens --vehicle_type=yellow \
+  --eval=PL \
+  --methods=LinUCB
 ```
 
-#### **Comprehensive Analysis (All 4 methods)**
-```bash
-python run_experiment.py \
-  --year=2019 --month=10 --days=1 \
-  --func=PL \
-  --methods=MinMaxCostFlow,MAPS,LinUCB,LP
-```
+## 📊 Data & Results
 
-#### **Extended Multi-day Analysis**
-```bash
-python run_experiment.py \
-  --year=2019 --month=10 --days=1,2,3,4,5,6,7 \
-  --func=PL,Sigmoid \
-  --methods=LP,MAPS,LinUCB
-```
+### Input Data Structure
 
-#### **Multi-month Experiments**
-```bash
-python run_experiment.py \
-  --year=2019 --months=3,4,5 --days=1,15 \
-  --func=PL \
-  --methods=LP,MAPS
-```
-
-## 📊 **Pricing Methods**
-
-### 1. **MinMaxCostFlow** (Hikima et al.)
-- **Source**: Extracted from the provided Hikima source code
-- **Algorithm**: Min-cost flow with delta-scaling
-- **Acceptance Functions**: PL (Piecewise Linear), Sigmoid
-- **Performance**: High computational complexity, optimal theoretical results
-
-### 2. **MAPS** (Area-based Pricing)
-- **Algorithm**: Bipartite matching with area-based pricing
-- **Strategy**: Price based on trip amount percentiles and geographic zones
-- **Performance**: Medium complexity, practical results
-
-### 3. **LinUCB** (Contextual Bandit)
-- **Algorithm**: Linear Upper Confidence Bound with contextual features
-- **Strategy**: Distance-based price multipliers with learning
-- **Performance**: Low complexity, adaptive pricing
-
-### 4. **LP** (Gupta-Nagarajan Linear Program)
-- **Algorithm**: Exact LP formulation using PuLP
-- **Implementation**: Point-to-point implementation of the provided theory
-- **Performance**: Medium complexity, theoretical optimum
-
-## 🔧 **Configuration**
-
-All parameters are configurable in `configs/experiment_config.json`:
-
-### **Sampling Strategy**
-```json
-{
-  "sampling_strategy": {
-    "method": "configurable",
-    "hikima_max_records": 8000,  # Exact Hikima replication
-    "default_max_records": null,  # No limit for extended analysis
-    "random_seed": 42
-  }
-}
-```
-
-### **Acceptance Functions**
-```json
-{
-  "acceptance_functions": {
-    "PL": {
-      "formula": "-2.0/trip_amount * price + 3.0",
-      "parameters": {"c_multiplier": 2.0, "d_constant": 3.0}
-    },
-    "Sigmoid": {
-      "formula": "1 - 1/(1 + exp((-price + beta*trip_amount)/(gamma*trip_amount)))",
-      "parameters": {"beta": 1.3, "gamma": 0.16539880833293433}
-    }
-  }
-}
-```
-
-### **Pricing Method Parameters**
-```json
-{
-  "pricing_methods": {
-    "MinMaxCostFlow": {
-      "parameters": {"epsilon": 1e-10, "alpha": 18.0, "s_taxi": 25.0}
-    },
-    "LP": {
-      "parameters": {
-        "min_price_factor": 0.5,
-        "max_price_factor": 2.0,
-        "price_grid_size": 10,
-        "solver_timeout": 300
-      }
-    }
-  }
-}
-```
-
-## 📁 **S3 Data Organization**
-
-### **Input Data**
+The system expects TLC data in S3 with this structure:
 ```
 s3://magisterka/datasets/
-├── green/year=2019/month=10/green_tripdata_2019-10.parquet
 ├── yellow/year=2019/month=10/yellow_tripdata_2019-10.parquet
-└── fhv/year=2015/month=01/fhv_tripdata_2015-01.parquet
+├── green/year=2019/month=10/green_tripdata_2019-10.parquet
+└── area_information.csv
 ```
 
-### **Results Output**
+### Output Results Structure
+
+Results are stored in S3 following this pattern:
 ```
 s3://magisterka/experiments/
-├── type=green/eval=pl/year=2019/month=10/{training_id}.json
-├── type=green/eval=sigmoid/year=2019/month=10/{training_id}.json
-└── type=yellow/eval=pl/year=2019/month=11/{training_id}.json
+└── type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/
+    └── 20250627_pricing_exp_yellow_Manhattan_20250627.json
 ```
 
-Each experiment file contains:
-- **Training ID**: 9-digit unique identifier for grouping experiments
-- **Configuration**: All experiment parameters
-- **Results**: Performance metrics for each pricing method
-- **Metadata**: Timestamps, data sizes, execution times
+Each result file contains:
+- **120 scenarios** (every 5 minutes from 10:00-20:00)
+- **Day-level statistics** (mean, std, min, max across scenarios)
+- **Method performance comparison**
+- **Detailed scenario results**
 
-## 🧪 **Experiment Scenarios**
+## 🔧 System Components
 
-### **Hikima Replication**
-- **Purpose**: Exact replication of Hikima et al. experimental setup
-- **Time Range**: Business hours (10:00-20:00)
-- **Sample Size**: 8000 records (as in original)
-- **Methods**: MinMaxCostFlow, MAPS, LinUCB
-- **Acceptance Functions**: PL, Sigmoid
+### Lambda Function (`lambdas/pricing-benchmark/`)
 
-### **Comprehensive Benchmark**
-- **Purpose**: All 4 methods comparison
-- **Time Range**: Configurable
-- **Sample Size**: No limit (full dataset)
-- **Methods**: All 4 methods
-- **Acceptance Functions**: Both PL and Sigmoid
+The core processing engine that:
+- Loads real taxi data from S3
+- Implements pricing algorithms
+- Runs Monte Carlo simulations
+- Stores aggregated results
 
-### **Scalability Testing**
-- **Purpose**: Large-scale experiments
-- **Time Range**: Full day (00:00-24:00)
-- **Sample Size**: No limit
-- **Methods**: Excludes MinMaxCostFlow (computationally intensive)
+### CLI Tool (`run_pricing_experiment.py`)
 
-## 🔍 **Results Analysis**
+Command-line interface that:
+- Manages experiment configuration
+- Handles LinUCB training automatically
+- Orchestrates 120 scenarios per day
+- Provides progress tracking
 
-### **Finding Results**
-```bash
-# List all experiments for a training session
-aws s3 ls s3://magisterka/experiments/type=green/eval=pl/year=2019/month=10/ --recursive
+### Training System
 
-# Download specific results
-aws s3 cp s3://magisterka/experiments/type=green/eval=pl/year=2019/month=10/123456789.json results.json
+LinUCB requires training on historical data:
+- **Automatic training** when needed
+- **July 2019 data** used for training by default
+- **31 days × 120 scenarios** = 3,720 training samples
+- **Trained models** stored in S3 for reuse
 
-# Search by pattern
-aws s3 ls s3://magisterka/experiments/ --recursive | grep "123456789"
-```
+## 🏙️ Supported Regions
 
-### **Result Structure**
-```json
-{
-  "training_id": "123456789",
-  "timestamp": "2024-01-15T10:30:00",
-  "configuration": {
-    "vehicle_type": "green",
-    "acceptance_function": "PL",
-    "methods_tested": ["MinMaxCostFlow", "MAPS", "LinUCB", "LP"]
-  },
-  "results": [
-    {
-      "method_name": "LP",
-      "objective_value": 1250.75,
-      "computation_time": 15.3,
-      "average_price": 8.45,
-      "match_rate": 0.87
-    }
-  ]
-}
-```
+- **Manhattan** - High-density urban area
+- **Brooklyn** - Mixed urban/suburban
+- **Queens** - Suburban with airport traffic  
+- **Bronx** - Urban residential
 
-## 📈 **Performance Metrics**
+## 🚗 Vehicle Types
 
-- **Objective Value**: Total expected profit from pricing
-- **Computation Time**: Algorithm execution time
-- **Match Rate**: Percentage of requesters matched to taxis
-- **Average Price**: Mean price across all requests
-- **Acceptance Rate**: Percentage of prices accepted by customers
+- **Yellow Taxi** - Traditional NYC taxis
+- **Green Taxi** - Outer borough taxis
+- **FHV** - For-Hire Vehicles (Uber, Lyft, etc.)
 
-## 🔬 **Advanced Usage**
+## 📈 Evaluation Functions
 
-### **Custom Scenarios**
-```bash
-# Full day analysis
-python run_experiment.py \
-  --year=2019 --month=10 --days=1 \
-  --func=PL --methods=LP,MAPS \
-  --time-range=full_day
+- **Piecewise Linear (PL)** - Deterministic price-acceptance relationship
+- **Sigmoid** - Smooth probabilistic acceptance function
 
-# Multi-borough comparison
-python run_experiment.py \
-  --year=2019 --month=10 --days=1 \
-  --func=PL --methods=LP \
-  --borough=Brooklyn
+## ⚙️ Configuration Options
 
-# High-frequency sampling
-python run_experiment.py \
-  --year=2019 --month=10 --days=1,2,3,4,5,6,7,8,9,10 \
-  --func=PL,Sigmoid --methods=LP,MAPS,LinUCB
-```
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--year` | Year to analyze | Required |
+| `--month` | Month (1-12) | Required |
+| `--day/days/start_day` | Day specification | Required |
+| `--borough` | NYC borough | Required |
+| `--vehicle_type` | Vehicle type | Required |
+| `--eval` | Evaluation functions | Required |
+| `--methods` | Pricing methods | Required |
+| `--training_period` | LinUCB training period | 2019-07 |
+| `--hour_start` | Experiment start hour | 10 |
+| `--hour_end` | Experiment end hour | 20 |
+| `--time_interval` | Scenario interval (minutes) | 5 |
+| `--dry_run` | Preview without execution | False |
 
-### **Direct Lambda Invocation**
-```bash
-aws lambda invoke \
-  --function-name rideshare-pricing-benchmark \
-  --payload '{
-    "training_id": "123456789",
-    "year": 2019,
-    "month": 10,
-    "day": 1,
-    "vehicle_type": "green",
-    "borough": "Manhattan",
-    "acceptance_function": "PL",
-    "methods": ["MinMaxCostFlow", "MAPS", "LinUCB", "LP"],
-    "scenario": "comprehensive"
-  }' \
-  output.json
-```
+## 🎯 Use Cases
 
-## 🛠️ **Development**
+### Research & Development
+- **Algorithm comparison** across different conditions
+- **Parameter sensitivity** analysis
+- **Performance benchmarking** on real data
 
-### **Adding New Pricing Methods**
-1. Extend `BasePricingMethod` class
-2. Implement `calculate_prices` method
-3. Add configuration in `experiment_config.json`
-4. Update CLI options
+### Operations Analysis  
+- **Demand pattern** analysis by time/location
+- **Supply-demand matching** optimization
+- **Revenue impact** assessment
 
-### **Modifying Acceptance Functions**
-1. Add function definition in config
-2. Update `_calculate_acceptance_probability` method
-3. Test with existing methods
+### Academic Studies
+- **Reproducible experiments** with standardized methodology
+- **Large-scale evaluation** across multiple days/regions
+- **Statistical significance** testing
 
-### **Custom Data Sources**
-1. Update S3 paths in configuration
-2. Modify data loading logic in `load_data_from_s3`
-3. Ensure column naming compatibility
+## 📋 Next Steps
 
-## 🚨 **Important Notes**
+1. **Review technical documentation** for detailed usage examples
+2. **Set up data pipeline** with your TLC data
+3. **Run test experiments** to validate setup
+4. **Scale to production** experiments
 
-- **Training IDs**: Each experiment run generates a unique 9-digit training ID for result grouping
-- **Container Images**: Lambda uses container images for large dependencies (PuLP, SciPy)
-- **Timeout Management**: Lambda functions have 15-minute timeout; large experiments may need splitting
-- **Data Sampling**: Configurable sampling strategy for performance vs. accuracy trade-offs
-- **No Hardcoding**: All parameters configurable; no hardcoded rush hours or Hikima-specific setups
+## 🆘 Support
 
-## 📚 **Research Applications**
+For technical details, data setup, and advanced usage examples, see:
+- **[TECHNICAL.md](TECHNICAL.md)** - Comprehensive technical documentation
+- **[Issues](../../issues)** - Report bugs or request features
 
-### **Temporal Analysis**
-```bash
-# Seasonal patterns (multiple months)
-python run_experiment.py --year=2019 --months=3,6,9,12 --days=1,15 --func=PL --methods=LP,MAPS
+## 📄 License
 
-# Weekly patterns (7 consecutive days)
-python run_experiment.py --year=2019 --month=10 --days=1,2,3,4,5,6,7 --func=PL,Sigmoid --methods=LP,MAPS,LinUCB
-```
-
-### **Comparative Studies**
-```bash
-# Method comparison (all 4 methods)
-python run_experiment.py --year=2019 --month=10 --days=1 --func=PL --methods=MinMaxCostFlow,MAPS,LinUCB,LP
-
-# Acceptance function comparison
-python run_experiment.py --year=2019 --month=10 --days=1 --func=PL,Sigmoid --methods=LP
-```
-
-### **Scalability Testing**
-```bash
-# Large-scale analysis (avoid MinMaxCostFlow for performance)
-python run_experiment.py --year=2019 --month=10 --days=1,2,3,4,5 --func=PL --methods=LP,MAPS,LinUCB --time-range=full_day
-```
-
----
-
-**🏆 This framework provides a clean, systematic approach to ride-hailing pricing research with real NYC data, supporting both exact Hikima replication and extended analysis!** 
+See LICENSE file for licensing information. 
