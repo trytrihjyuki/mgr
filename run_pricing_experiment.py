@@ -64,6 +64,13 @@ Examples:
         parser.add_argument('--dry_run', action='store_true', help='Show what would be executed without running')
         parser.add_argument('--parallel', type=int, default=1, help='Number of parallel executions (default: 1)')
         parser.add_argument('--training_id', help='Custom training ID (default: auto-generated)')
+        parser.add_argument('--skip_training', action='store_true', help='Skip LinUCB training (use pre-trained models or fail if not available)')
+        parser.add_argument('--force_training', action='store_true', help='Force LinUCB retraining even if model exists')
+        
+        # Cloud optimization options
+        parser.add_argument('--parallel_executions', type=int, default=10, help='Number of parallel Lambda executions (default: 10)')
+        parser.add_argument('--production_mode', action='store_true', help='Enable production mode for faster execution with reduced logging')
+        parser.add_argument('--timeout', type=int, default=900, help='Lambda timeout in seconds (default: 900)')
         
         return parser.parse_args()
     
@@ -120,6 +127,10 @@ Examples:
             if method not in valid_methods:
                 errors.append(f"Invalid method: {method}. Valid options: {', '.join(valid_methods)}")
         
+        # Validate training flags
+        if args.skip_training and args.force_training:
+            errors.append("Cannot specify both --skip_training and --force_training")
+        
         if errors:
             print("❌ Validation errors:")
             for error in errors:
@@ -158,11 +169,22 @@ Examples:
         
         try:
             self.s3_client.head_object(Bucket=self.bucket_name, Key=training_key)
-            print(f"✅ LinUCB training data found: s3://{self.bucket_name}/{training_key}")
-            return True
+            if args.force_training:
+                print(f"🔄 Forcing LinUCB retraining despite existing model...")
+                return self.trigger_linucb_training(args, training_id)
+            else:
+                print(f"✅ LinUCB training data found: s3://{self.bucket_name}/{training_key}")
+                return True
         except:
-            print(f"⚠️ LinUCB training data not found. Triggering training for {args.training_period}...")
-            return self.trigger_linucb_training(args, training_id)
+            if args.skip_training:
+                print(f"❌ LinUCB training data not found and --skip_training specified.")
+                print(f"   Missing: s3://{self.bucket_name}/{training_key}")
+                print(f"   Either remove LinUCB from --methods or run without --skip_training")
+                return False
+            else:
+                print(f"⚠️ LinUCB training data not found. Triggering training for {args.training_period}...")
+                print(f"   This may take 10-20 minutes. Use --skip_training to avoid this.")
+                return self.trigger_linucb_training(args, training_id)
     
     def trigger_linucb_training(self, args, training_id):
         """Trigger LinUCB training Lambda function."""
@@ -351,6 +373,87 @@ Examples:
         else:
             print("\n❌ Some experiments failed. Check logs above.")
             sys.exit(1)
+
+def invoke_lambda_scenario(lambda_client, scenario):
+    """Invoke single Lambda scenario with optimized payload."""
+    try:
+        # Add production mode flag to reduce logging
+        if hasattr(invoke_lambda_scenario, 'production_mode') and invoke_lambda_scenario.production_mode:
+            scenario['production_mode'] = True
+        
+        response = lambda_client.invoke(
+            FunctionName='rideshare-pricing-benchmark',
+            InvocationType='RequestResponse',
+            Payload=json.dumps(scenario)
+        )
+        
+        # Parse response
+        response_payload = json.loads(response['Payload'].read())
+        
+        if response.get('StatusCode') == 200:
+            return scenario['scenario_id'], response_payload
+        else:
+            print(f"⚠️ Lambda invocation failed for scenario {scenario['scenario_id']}: Status {response.get('StatusCode')}")
+            return scenario['scenario_id'], None
+    except Exception as e:
+        print(f"❌ Error invoking scenario {scenario['scenario_id']}: {e}")
+        return scenario['scenario_id'], None
+
+def execute_experiments_parallel(scenarios, args):
+    """Execute experiments with optimized parallel processing."""
+    lambda_client = boto3.client('lambda', region_name='eu-north-1')
+    
+    # Set production mode flag for all scenarios
+    if args.production_mode:
+        invoke_lambda_scenario.production_mode = True
+        for scenario in scenarios:
+            scenario['production_mode'] = True
+    
+    print(f"🚀 Executing {len(scenarios)} scenarios with {args.parallel_executions} parallel executions")
+    
+    # Use ThreadPoolExecutor for optimal I/O bound Lambda invocations
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time
+    
+    results = {}
+    completed = 0
+    
+    start_time = time.time()
+    
+    with ThreadPoolExecutor(max_workers=args.parallel_executions) as executor:
+        # Submit all scenarios
+        future_to_scenario = {
+            executor.submit(invoke_lambda_scenario, lambda_client, scenario): scenario 
+            for scenario in scenarios
+        }
+        
+        # Process completed scenarios
+        for future in as_completed(future_to_scenario):
+            scenario = future_to_scenario[future]
+            try:
+                scenario_id, result = future.result()
+                results[scenario_id] = result
+                completed += 1
+                
+                # Progress update
+                elapsed = time.time() - start_time
+                rate = completed / elapsed if elapsed > 0 else 0
+                eta = (len(scenarios) - completed) / rate if rate > 0 else 0
+                
+                print(f"⏳ [{completed:3d}/{len(scenarios)}] Completed scenario {scenario_id} | "
+                      f"Rate: {rate:.1f}/s | ETA: {eta:.0f}s")
+                
+            except Exception as e:
+                print(f"❌ Error processing scenario {scenario['scenario_id']}: {e}")
+                results[scenario['scenario_id']] = None
+    
+    total_time = time.time() - start_time
+    success_count = sum(1 for r in results.values() if r is not None)
+    
+    print(f"✅ Parallel execution completed: {success_count}/{len(scenarios)} successful in {total_time:.1f}s")
+    print(f"📊 Average rate: {len(scenarios)/total_time:.1f} scenarios/second")
+    
+    return results
 
 if __name__ == "__main__":
     cli = PricingExperimentCLI()

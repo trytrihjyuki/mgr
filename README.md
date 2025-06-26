@@ -81,6 +81,30 @@ python run_pricing_experiment.py \
   --methods=LinUCB
 ```
 
+### Fast LinUCB Experiments (Skip Training)
+
+Use pre-trained models for quick experiments:
+
+```bash
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=6 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL,Sigmoid --methods=LinUCB,MAPS \
+  --skip_training
+```
+
+### Force LinUCB Retraining
+
+Retrain LinUCB models from scratch:
+
+```bash
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=6 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL --methods=LinUCB \
+  --force_training
+```
+
 ## 📊 Data & Results
 
 ### Input Data Structure
@@ -129,9 +153,11 @@ Command-line interface that:
 ### Training System
 
 LinUCB requires training on historical data:
-- **Automatic training** when needed
-- **July 2019 data** used for training by default
-- **31 days × 120 scenarios** = 3,720 training samples
+- **Pre-trained models** available for 2019-07/08/09 periods
+- **Automatic training** when needed (10-20 minutes)
+- **Skippable training** with `--skip_training` flag for fast experiments
+- **Force retraining** with `--force_training` flag
+- **July 2019 data** used as default for other months
 - **Trained models** stored in S3 for reuse
 
 ## 🏙️ Supported Regions
@@ -164,6 +190,8 @@ LinUCB requires training on historical data:
 | `--eval` | Evaluation functions | Required |
 | `--methods` | Pricing methods | Required |
 | `--training_period` | LinUCB training period | 2019-07 |
+| `--skip_training` | Skip LinUCB training (use pre-trained) | False |
+| `--force_training` | Force LinUCB retraining | False |
 | `--hour_start` | Experiment start hour | 10 |
 | `--hour_end` | Experiment end hour | 20 |
 | `--time_interval` | Scenario interval (minutes) | 5 |
@@ -188,10 +216,15 @@ LinUCB requires training on historical data:
 
 ## 📋 Next Steps
 
-1. **Review technical documentation** for detailed usage examples
-2. **Set up data pipeline** with your TLC data
-3. **Run test experiments** to validate setup
-4. **Scale to production** experiments
+1. **Set up pre-trained LinUCB models** (optional but recommended):
+   ```bash
+   python prepare_hikima_matrices.py
+   ```
+
+2. **Review technical documentation** for detailed usage examples
+3. **Set up data pipeline** with your TLC data
+4. **Run test experiments** to validate setup
+5. **Scale to production** experiments
 
 ## 🆘 Support
 

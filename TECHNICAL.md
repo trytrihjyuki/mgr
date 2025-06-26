@@ -326,6 +326,82 @@ aws lambda update-function-code \
 echo "✅ Lambda function updated"
 ```
 
+## 🔧 Pre-trained LinUCB Models Setup
+
+### 1. Prepare Hikima-based Pre-trained Models
+
+Create and upload pre-trained LinUCB matrices based on the [Hikima AAAI 2021 methodology](https://github.com/Yuya-Hikima/AAAI-2021-Integrated-Optimization-fot-Bipartite-Matching-and-Its-Stochastic-Behavior/tree/main/Rideshare_experiment/work):
+
+```bash
+# Create and upload all pre-trained models (recommended)
+python prepare_hikima_matrices.py
+
+# Only create matrices without uploading (for testing)
+python prepare_hikima_matrices.py --skip_upload
+```
+
+This creates pre-trained models for:
+- **Training periods**: 2019-07, 2019-08, 2019-09
+- **Vehicle types**: yellow, green
+- **Boroughs**: Manhattan, Brooklyn, Queens, Bronx
+- **Default period**: 2019-07 (used for other months)
+
+### 2. Training Options in Experiments
+
+When running experiments with LinUCB, you have several training options:
+
+#### Option A: Use Pre-trained Models (Fast)
+```bash
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=6 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL --methods=LinUCB \
+  --skip_training
+```
+- ⚡ **Instant start** - no waiting for training
+- ✅ **Uses realistic models** based on Hikima methodology
+- 📊 **Consistent results** across experiments
+
+#### Option B: Automatic Training (Default)
+```bash
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=6 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL --methods=LinUCB
+```
+- 🔄 **Checks for existing model** first
+- ⏳ **Trains if needed** (10-20 minutes)
+- 💾 **Saves to S3** for future use
+
+#### Option C: Force Retraining
+```bash
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=6 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL --methods=LinUCB \
+  --force_training
+```
+- 🔄 **Always retrains** from scratch
+- 📈 **Uses actual data** for the specified training period
+- ⏳ **Takes 10-20 minutes** but gives period-specific results
+
+### 3. Training Period Options
+
+The system supports different training periods:
+
+```bash
+# Use 2019-07 training data (default)
+--training_period=2019-07
+
+# Use 2019-08 training data  
+--training_period=2019-08
+
+# Use 2019-09 training data
+--training_period=2019-09
+```
+
+**Default behavior**: If no pre-trained model exists for the specified period, the system falls back to 2019-07 data.
+
 ## ✅ Data Validation
 
 ### 1. Validate S3 Data Structure
