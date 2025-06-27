@@ -89,6 +89,12 @@ Examples:
         parser.add_argument('--skip_training', action='store_true', help='Skip LinUCB training (use pre-trained models)')
         parser.add_argument('--force_training', action='store_true', help='Force LinUCB retraining')
         
+        # Hikima time window configuration
+        parser.add_argument('--hour_start', type=int, default=10, help='Start hour (default: 10 for 10:00)')
+        parser.add_argument('--hour_end', type=int, default=20, help='End hour (default: 20 for 20:00)')
+        parser.add_argument('--time_interval', type=int, default=5, help='Time interval (default: 5)')
+        parser.add_argument('--time_unit', choices=['m', 's'], default='m', help='Time unit: m=minutes, s=seconds (default: m)')
+        
         # Testing and analysis
         parser.add_argument('--dry_run', action='store_true', help='Show execution plan without running')
         parser.add_argument('--training_id', help='Custom training ID')
@@ -156,7 +162,7 @@ Examples:
         if 'LinUCB' not in methods:
             return True
         
-        model_key = f"models/linucb/{args.vehicle_type}_{args.borough}_201907/trained_model.json"
+        model_key = f"models/linucb/{args.vehicle_type}_{args.borough}_201907/trained_model.pkl"
         
         try:
             self.s3_client.head_object(Bucket=self.bucket_name, Key=model_key)
@@ -172,17 +178,41 @@ Examples:
                 return True
     
     def create_scenario_payloads(self, args, eval_functions, methods, days, training_id):
-        """Create optimized scenario payloads for parallel execution."""
+        """Create optimized scenario payloads for parallel execution with configurable time windows - EXACT Hikima methodology."""
         scenarios = []
         scenario_counter = 0
         
+        # Calculate total scenarios based on EXACT Hikima methodology
+        if args.time_unit == 'm':
+            # Minutes: calculate how many intervals fit in the time range
+            total_minutes = (args.hour_end - args.hour_start) * 60
+            total_scenarios = total_minutes // args.time_interval
+            unit_display = f"{args.time_interval}min"
+        else:  # seconds
+            # Seconds: calculate how many intervals fit in the time range  
+            total_seconds = (args.hour_end - args.hour_start) * 3600
+            total_scenarios = total_seconds // args.time_interval
+            unit_display = f"{args.time_interval}s"
+        
+        print(f"📊 Hikima Configuration: {args.hour_start}:00-{args.hour_end}:00, {unit_display} intervals = {total_scenarios} scenarios/day")
+        
         for day in days:
             for eval_function in eval_functions:
-                # 120 scenarios per day (every 5 minutes from 10:00-20:00)
-                for scenario_index in range(120):
-                    scenario_minute = scenario_index * 5
-                    current_hour = 10 + (scenario_minute // 60)
-                    current_minute = scenario_minute % 60
+                # Generate scenarios based on exact Hikima time methodology
+                for scenario_index in range(total_scenarios):
+                    if args.time_unit == 'm':
+                        # Minutes-based calculation
+                        scenario_minute = scenario_index * args.time_interval
+                        current_hour = args.hour_start + (scenario_minute // 60)
+                        current_minute = scenario_minute % 60
+                        current_second = 0
+                    else:  # seconds
+                        # Seconds-based calculation
+                        scenario_seconds = scenario_index * args.time_interval
+                        total_minutes = scenario_seconds // 60
+                        current_hour = args.hour_start + (total_minutes // 60)
+                        current_minute = total_minutes % 60
+                        current_second = scenario_seconds % 60
                     
                     scenario = {
                         'scenario_id': f"day{day:02d}_{eval_function}_s{scenario_index:03d}",
@@ -194,10 +224,14 @@ Examples:
                         'acceptance_function': eval_function,
                         'scenario_index': scenario_index,
                         'time_window': {
-                            'hour_start': 10,
-                            'hour_end': 20,
+                            'hour_start': args.hour_start,
+                            'hour_end': args.hour_end,
                             'minute_start': 0,
-                            'time_interval': 5
+                            'time_interval': args.time_interval,
+                            'time_unit': args.time_unit,
+                            'current_hour': current_hour,
+                            'current_minute': current_minute,
+                            'current_second': current_second
                         },
                         'methods': methods,
                         'training_id': training_id,

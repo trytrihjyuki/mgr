@@ -148,46 +148,38 @@ class PricingExperimentRunner:
     
     def load_taxi_data(self, taxi_type: str, year: int, month: int, day: int, 
                       borough: str, time_start: datetime, time_end: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Load real taxi data from S3 following Hikima methodology."""
-        if not PARQUET_SUPPORT:
-            logger.warning("⚠️ PyArrow not available - using synthetic fallback")
-            return self.generate_fallback_data(taxi_type, year, month, day, borough, time_start, time_end)
-            
-        try:
-            # Try parquet first, then CSV fallback
-            s3_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
-            
-            logger.info(f"📥 Loading data from s3://{self.bucket_name}/{s3_key}")
-            
-            # Download parquet file from S3
-            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-            parquet_data = response['Body'].read()
-            
-            # Read parquet data
-            table = pq.read_table(io.BytesIO(parquet_data))
-            df = table.to_pandas()
-            
-            logger.info(f"📊 Loaded {len(df)} total trips from {s3_key}")
-            
-        except Exception as parquet_error:
-            logger.warning(f"⚠️ Parquet loading failed: {parquet_error}")
-            
-            # Try CSV fallback
-            try:
-                csv_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.csv"
-                logger.info(f"📥 Fallback: Loading CSV from s3://{self.bucket_name}/{csv_key}")
-                
-                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=csv_key)
-                df = pd.read_csv(io.BytesIO(response['Body'].read()))
-                logger.info(f"📊 Loaded {len(df)} total trips from CSV")
-                
-            except Exception as csv_error:
-                logger.warning(f"⚠️ CSV loading also failed: {csv_error}")
-                logger.info("🎲 Using synthetic fallback")
-                return self.generate_fallback_data(taxi_type, year, month, day, borough, time_start, time_end)
+        """Load SINGLE taxi type data from S3 - SEPARATE experiments per vehicle type (NO combination)."""
         
-        # Process the loaded data using Hikima methodology
-        return self.process_taxi_data_hikima(df, taxi_type, year, month, day, borough, time_start, time_end)
+        df = None
+        
+        # Load ONLY the specified taxi type (NO combination)
+        try:
+            if PARQUET_SUPPORT:
+                s3_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
+                logger.info(f"📥 Loading {taxi_type.upper()} data: s3://{self.bucket_name}/{s3_key}")
+                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+                table = pq.read_table(io.BytesIO(response['Body'].read()))
+                df = table.to_pandas()
+            else:
+                raise Exception("No parquet support")
+        except Exception as e:
+            try:
+                s3_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.csv"
+                logger.info(f"📥 Fallback CSV: {taxi_type.upper()} data: s3://{self.bucket_name}/{s3_key}")
+                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+                df = pd.read_csv(io.BytesIO(response['Body'].read()))
+            except Exception as e2:
+                logger.warning(f"⚠️ Could not load {taxi_type} taxi data: {e2}")
+        
+        # If loading failed, use fallback
+        if df is None:
+            logger.warning(f"⚠️ No {taxi_type} taxi data available - using synthetic fallback")
+            return self.generate_fallback_data(taxi_type, year, month, day, borough, time_start, time_end)
+        
+        logger.info(f"📊 Loaded {taxi_type.upper()}: {len(df)} trips")
+        
+        # Process the loaded data using exact Hikima methodology for SINGLE taxi type
+        return self.process_taxi_data_hikima_single_type(df, taxi_type, year, month, day, borough, time_start, time_end)
     
     def generate_fallback_data(self, taxi_type: str, year: int, month: int, day: int, 
                               borough: str, time_start: datetime, time_end: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -289,170 +281,185 @@ class PricingExperimentRunner:
         
         return requesters_df, taxis_df
     
-    def process_taxi_data_hikima(self, df: pd.DataFrame, taxi_type: str, year: int, month: int, day: int,
-                                borough: str, time_start: datetime, time_end: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Process loaded taxi data following exact Hikima methodology."""
+    def process_taxi_data_hikima_single_type(self, df: pd.DataFrame, taxi_type: str,
+                                            year: int, month: int, day: int, borough: str, 
+                                            time_start: datetime, time_end: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Process SINGLE taxi type data following EXACT Hikima methodology - NO data combination."""
         
         # Load area information
         area_info = self.load_area_information()
         
-        # Standardize column names based on taxi type
+        # Get column names based on taxi type
         if taxi_type == 'green':
-            pickup_time_col = 'lpep_pickup_datetime'
-            dropoff_time_col = 'lpep_dropoff_datetime'
+            pickup_col = 'lpep_pickup_datetime'
+            dropoff_col = 'lpep_dropoff_datetime'
         elif taxi_type == 'yellow':
-            pickup_time_col = 'tpep_pickup_datetime'  
-            dropoff_time_col = 'tpep_dropoff_datetime'
+            pickup_col = 'tpep_pickup_datetime'
+            dropoff_col = 'tpep_dropoff_datetime'
         else:  # fhv
-            pickup_time_col = 'pickup_datetime'
-            dropoff_time_col = 'dropOff_datetime'
+            pickup_col = 'pickup_datetime'
+            dropoff_col = 'dropOff_datetime'
         
-        # Ensure datetime columns are parsed
-        if pickup_time_col in df.columns:
-            df[pickup_time_col] = pd.to_datetime(df[pickup_time_col])
-        if dropoff_time_col in df.columns:
-            df[dropoff_time_col] = pd.to_datetime(df[dropoff_time_col])
+        # Parse datetime columns
+        df[pickup_col] = pd.to_datetime(df[pickup_col])
+        df[dropoff_col] = pd.to_datetime(df[dropoff_col])
         
-        # Filter by date (specific day)
-        day_start = datetime(year, month, day, 0, 0, 0)
-        day_end = datetime(year, month, day, 23, 59, 59)
+        # Use dynamic time range based on the experiment parameters (no hardcoding)
+        # Hikima filters to the full experiment day range, not individual scenarios
+        day_start_time = datetime(year, month, day, 0, 0, 0)  # Start of day
+        day_end_time = datetime(year, month, day, 23, 59, 59)  # End of day
         
-        df = df[
-            (df[pickup_time_col] >= day_start) & 
-            (df[pickup_time_col] <= day_end)
+        # Select required columns and merge with area information
+        if taxi_type in ['green', 'yellow']:
+            df_filtered = df[[pickup_col, dropoff_col, 'PULocationID', 'DOLocationID', 'trip_distance', 'total_amount']]
+        else:  # fhv
+            df_filtered = df[[pickup_col, dropoff_col, 'PUlocationID', 'DOlocationID']]
+            df_filtered = df_filtered.rename(columns={'PUlocationID': 'PULocationID', 'DOlocationID': 'DOLocationID'})
+            # Add default values for missing columns in FHV
+            df_filtered['trip_distance'] = 2.0  # Default distance
+            df_filtered['total_amount'] = 15.0  # Default amount
+        
+        # Merge with area information
+        df_merged = pd.merge(df_filtered, area_info, how="inner", left_on="PULocationID", right_on="LocationID")
+        
+        # Apply Hikima filters
+        tripdata = df_merged[
+            (df_merged["trip_distance"] > 1e-3) &
+            (df_merged["total_amount"] > 1e-3) &
+            (df_merged["borough"] == borough) &
+            (df_merged["PULocationID"] < 264) &
+            (df_merged["DOLocationID"] < 264) &
+            (df_merged[pickup_col] > day_start_time) &
+            (df_merged[pickup_col] < day_end_time)
         ]
         
-        logger.info(f"📅 After day filter ({day}): {len(df)} trips")
+        logger.info(f"🚗 {taxi_type.upper()} after filtering: {len(tripdata)} trips")
         
-        # Merge with area information to filter by borough
-        df = pd.merge(df, area_info, how="inner", left_on="PULocationID", right_on="LocationID")
+        # Target time for this scenario - EXACT Hikima methodology
+        # Hikima uses set_time as the start of the time window
+        target_time = time_start
         
-        # Filter by data quality and borough
-        df = df[
-            (df["trip_distance"] > 1e-3) &
-            (df["total_amount"] > 1e-3) &
-            (df["borough"] == borough) &
-            (df["PULocationID"] < 264) &
-            (df["DOLocationID"] < 264)
+        # Use EXACT parameterized time window from scenario
+        time_interval_seconds = (time_end - time_start).total_seconds()
+        logger.info(f"⏱️ Using EXACT scenario time interval: {time_interval_seconds}s from {time_start} to {time_end}")
+        
+        # Extract requesters: pickup times within time interval  
+        requesters = tripdata[
+            (tripdata[pickup_col] > target_time) &
+            (tripdata[pickup_col] < target_time + timedelta(seconds=time_interval_seconds))
         ]
         
-        logger.info(f"🏙️ After quality & {borough} filter: {len(df)} trips")
+        # Extract taxis: dropoff times within time interval (these become available taxis)
+        taxis = tripdata[
+            (tripdata[dropoff_col] > target_time) &
+            (tripdata[dropoff_col] < target_time + timedelta(seconds=time_interval_seconds))
+        ]
         
-        # Hikima methodology: Use time step (ts) based on region
-        # 30 seconds for Manhattan, 300 seconds for others
-        if borough == 'Manhattan':
-            ts_seconds = 30
-        else:
-            ts_seconds = 300
+        if len(requesters) == 0 or len(taxis) == 0:
+            logger.warning(f"⚠️ No requesters ({len(requesters)}) or taxis ({len(taxis)}) found for {target_time}")
+            return pd.DataFrame(), pd.DataFrame()
         
-        logger.info(f"⏱️ Using Hikima ts={ts_seconds}s for {borough}")
+        # Convert to numpy arrays for processing (following Hikima's exact structure)
+        df_requesters = requesters.values
+        df_taxis = taxis['DOLocationID'].values
         
-        # Target minute for this scenario (middle of time window)
-        target_time = time_start + (time_end - time_start) / 2
+        # Calculate trip duration in seconds (Hikima methodology)
+        time_consume = np.zeros([df_requesters.shape[0], 1])
+        for i in range(df_requesters.shape[0]):
+            time_consume[i] = (df_requesters[i, 6] - df_requesters[i, 5]).total_seconds()
         
-        # Requesters (U): Extract taxi requests with pickup time within ts seconds from target minute
-        ts_delta = timedelta(seconds=ts_seconds)
-        requesters_df = df[
-            (df[pickup_time_col] >= target_time - ts_delta) & 
-            (df[pickup_time_col] <= target_time + ts_delta)
-        ].copy()
+        # Combine requesters data: [borough, PULocationID, DOLocationID, trip_distance, total_amount, duration]
+        df_requesters = np.hstack([df_requesters[:, 0:5], time_consume])
         
-        # Taxis (V): Extract taxis that completed rides within past ts seconds from target minute
-        # (These are taxis that become available for dispatch)
-        taxis_df = df[
-            (df[dropoff_time_col] >= target_time - ts_delta) & 
-            (df[dropoff_time_col] <= target_time)
-        ].copy()
+        # Delete data with too little distance traveled (Hikima filters)
+        df_requesters = df_requesters[df_requesters[:, 3] > 1e-3]
+        df_requesters = df_requesters[df_requesters[:, 4] > 1e-3]
         
-        logger.info(f"🎯 Hikima extraction: {len(requesters_df)} requesters, {len(taxis_df)} taxis within {ts_seconds}s of {target_time.strftime('%H:%M:%S')}")
+        # Sort by distance in ascending order (required by MAPS)
+        df_requesters = df_requesters[np.argsort(df_requesters[:, 3])]
         
-        # Process requesters (U) following Hikima methodology
-        if len(requesters_df) > 0:
-            # Calculate trip duration in seconds
-            requesters_df['trip_duration_seconds'] = (
-                requesters_df[dropoff_time_col] - requesters_df[pickup_time_col]
-            ).dt.total_seconds()
-            
-            # Convert distance to km (assuming it's in miles)
-            requesters_df['trip_distance_km'] = requesters_df['trip_distance'] * 1.60934
-            
-            # Add Gaussian noise to pickup and dropoff coordinates (Hikima methodology)
-            requesters_df = self.add_coordinate_noise_hikima(requesters_df, area_info, 'requesters')
-            
-            # Sort by distance as required by MAPS
-            requesters_df = requesters_df.sort_values('trip_distance_km')
-            
-            # Select relevant columns following Hikima format
-            requesters_df = requesters_df[[
-                'borough', 'PULocationID', 'DOLocationID', 
-                'trip_distance_km', 'total_amount', 'trip_duration_seconds',
-                'pickup_lat', 'pickup_lon', 'dropoff_lat', 'dropoff_lon'
-            ]].reset_index(drop=True)
+        # Convert distance to km (Hikima: miles to km)
+        df_requesters[:, 3] = df_requesters[:, 3] * 1.60934
         
-        # Process taxis (V) following Hikima methodology
-        if len(taxis_df) > 0:
-            # Add Gaussian noise to taxi locations (dropoff locations = taxi availability)
-            taxis_df = self.add_coordinate_noise_hikima(taxis_df, area_info, 'taxis')
-            
-            # Select relevant columns
-            taxis_df = taxis_df[['DOLocationID', 'taxi_lat', 'taxi_lon']].reset_index(drop=True)
+        # Add Gaussian noise to coordinates (EXACT Hikima parameters)
+        df_requesters_processed = self.add_hikima_coordinate_noise(df_requesters, df_taxis, area_info)
+        df_taxis_processed = pd.DataFrame({'DOLocationID': df_taxis})
         
-        logger.info(f"🚗 Hikima processed data: {len(requesters_df)} requesters, {len(taxis_df)} taxis")
+        logger.info(f"🚗 Hikima processed {taxi_type}: {len(df_requesters_processed)} requesters, {len(df_taxis_processed)} taxis")
         
-        return requesters_df, taxis_df
+        return df_requesters_processed, df_taxis_processed
     
-    def add_coordinate_noise_hikima(self, df: pd.DataFrame, area_info: pd.DataFrame, data_type: str) -> pd.DataFrame:
-        """Add Gaussian noise to coordinates following Hikima methodology."""
-        logger.info(f"🎲 Adding Gaussian noise to {data_type} coordinates (Hikima method)")
+    def add_hikima_coordinate_noise(self, df_requesters: np.ndarray, df_taxis: np.ndarray, area_info: pd.DataFrame) -> pd.DataFrame:
+        """Add Gaussian noise to coordinates using EXACT Hikima parameters."""
         
-        if data_type == 'requesters':
-            # Add noise to pickup coordinates
-            for i in range(len(df)):
-                pu_location_id = int(df.iloc[i]['PULocationID'])
-                do_location_id = int(df.iloc[i]['DOLocationID'])
-                
-                # Get base coordinates for pickup
-                pu_coords = area_info[area_info['LocationID'] == pu_location_id]
-                if len(pu_coords) > 0:
-                    base_lat = pu_coords.iloc[0]['latitude']
-                    base_lon = pu_coords.iloc[0]['longitude']
-                    # Add Gaussian noise (same parameters as Hikima paper)
-                    df.at[i, 'pickup_lat'] = base_lat + np.random.normal(0, 0.00306)
-                    df.at[i, 'pickup_lon'] = base_lon + np.random.normal(0, 0.000896)
-                else:
-                    # Fallback coordinates if area not found
-                    df.at[i, 'pickup_lat'] = 40.7589 + np.random.normal(0, 0.00306)
-                    df.at[i, 'pickup_lon'] = -73.9851 + np.random.normal(0, 0.000896)
-                
-                # Get base coordinates for dropoff
-                do_coords = area_info[area_info['LocationID'] == do_location_id]
-                if len(do_coords) > 0:
-                    base_lat = do_coords.iloc[0]['latitude']
-                    base_lon = do_coords.iloc[0]['longitude']
-                    df.at[i, 'dropoff_lat'] = base_lat + np.random.normal(0, 0.00306)
-                    df.at[i, 'dropoff_lon'] = base_lon + np.random.normal(0, 0.000896)
-                else:
-                    df.at[i, 'dropoff_lat'] = 40.7589 + np.random.normal(0, 0.00306)
-                    df.at[i, 'dropoff_lon'] = -73.9851 + np.random.normal(0, 0.000896)
+        n = df_requesters.shape[0]
+        m = df_taxis.shape[0]
         
-        elif data_type == 'taxis':
-            # Add noise to taxi locations (dropoff locations)
-            for i in range(len(df)):
-                location_id = int(df.iloc[i]['DOLocationID'])
-                
-                # Get base coordinates
-                coords = area_info[area_info['LocationID'] == location_id]
-                if len(coords) > 0:
-                    base_lat = coords.iloc[0]['latitude']
-                    base_lon = coords.iloc[0]['longitude']
-                    df.at[i, 'taxi_lat'] = base_lat + np.random.normal(0, 0.00306)
-                    df.at[i, 'taxi_lon'] = base_lon + np.random.normal(0, 0.000896)
-                else:
-                    # Fallback coordinates
-                    df.at[i, 'taxi_lat'] = 40.7589 + np.random.normal(0, 0.00306)
-                    df.at[i, 'taxi_lon'] = -73.9851 + np.random.normal(0, 0.000896)
+        # Requester pickup coordinates with Gaussian noise
+        requester_pickup_lat = []
+        requester_pickup_lon = []
+        requester_dropoff_lat = []
+        requester_dropoff_lon = []
         
-        return df
+        for i in range(n):
+            pu_location_id = int(df_requesters[i, 1]) - 1  # Convert to 0-based index
+            do_location_id = int(df_requesters[i, 2]) - 1
+            
+            # Get base coordinates for pickup
+            if pu_location_id < len(area_info):
+                base_pu_lat = area_info.iloc[pu_location_id]['latitude']
+                base_pu_lon = area_info.iloc[pu_location_id]['longitude']
+            else:
+                base_pu_lat = 40.7589
+                base_pu_lon = -73.9851
+            
+            # Get base coordinates for dropoff
+            if do_location_id < len(area_info):
+                base_do_lat = area_info.iloc[do_location_id]['latitude'] 
+                base_do_lon = area_info.iloc[do_location_id]['longitude']
+            else:
+                base_do_lat = 40.7589
+                base_do_lon = -73.9851
+            
+            # Add EXACT Hikima Gaussian noise
+            requester_pickup_lat.append(base_pu_lat + np.random.normal(0, 0.00306))
+            requester_pickup_lon.append(base_pu_lon + np.random.normal(0, 0.000896))
+            requester_dropoff_lat.append(base_do_lat + np.random.normal(0, 0.00306))
+            requester_dropoff_lon.append(base_do_lon + np.random.normal(0, 0.000896))
+        
+        # Taxi coordinates with Gaussian noise
+        taxi_lat = []
+        taxi_lon = []
+        
+        for j in range(m):
+            location_id = int(df_taxis[j]) - 1  # Convert to 0-based index
+            
+            if location_id < len(area_info):
+                base_lat = area_info.iloc[location_id]['latitude']
+                base_lon = area_info.iloc[location_id]['longitude'] 
+            else:
+                base_lat = 40.7589
+                base_lon = -73.9851
+            
+            taxi_lat.append(base_lat + np.random.normal(0, 0.00306))
+            taxi_lon.append(base_lon + np.random.normal(0, 0.000896))
+        
+        # Create final DataFrame following Hikima structure
+        requesters_df = pd.DataFrame({
+            'borough': [df_requesters[i, 0] for i in range(n)],
+            'PULocationID': [int(df_requesters[i, 1]) for i in range(n)],
+            'DOLocationID': [int(df_requesters[i, 2]) for i in range(n)],
+            'trip_distance_km': [df_requesters[i, 3] for i in range(n)],
+            'total_amount': [df_requesters[i, 4] for i in range(n)],
+            'trip_duration_seconds': [df_requesters[i, 5] for i in range(n)],
+            'pickup_lat': requester_pickup_lat,
+            'pickup_lon': requester_pickup_lon,
+            'dropoff_lat': requester_dropoff_lat,
+            'dropoff_lon': requester_dropoff_lon,
+            'taxi_coordinates': [(taxi_lat, taxi_lon)] * n  # Add taxi coordinates for edge weight calculation
+        })
+        
+        return requesters_df
     
     def calculate_distance_matrix_and_edge_weights(self, requesters_df: pd.DataFrame, taxis_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """Calculate distance matrix and edge weights following Hikima's exact methodology."""
@@ -503,15 +510,10 @@ class PricingExperimentRunner:
                 total_distance_km = taxi_to_pickup_km + trip_distance_km
                 distance_matrix[i, j] = total_distance_km
                 
-                # Calculate τuv (time required for taxi v to fulfill request u)
-                # Assuming average speed of 25 km/h in NYC traffic (Hikima uses s_taxi = 25.0)
-                tau_uv = total_distance_km / 25.0  # hours
-                
-                # Calculate edge weights following Hikima: wuv = -18.0 * τuv when τuv ≤ 0.1, otherwise -∞
-                if tau_uv <= 0.1:  # 0.1 hours = 6 minutes
-                    edge_weights[i, j] = -18.0 * tau_uv
-                else:
-                    edge_weights[i, j] = -np.inf  # Constraint: cannot match with distant taxis
+                # EXACT Hikima edge weight calculation:
+                # W[i,j] = -(distance_ij[i,j] + df_requesters[i,3]) / s_taxi * alpha
+                # where distance_ij[i,j] is taxi-to-pickup distance, df_requesters[i,3] is trip distance
+                edge_weights[i, j] = -(taxi_to_pickup_km + trip_distance_km) / self.s_taxi * self.alpha
         
         logger.info(f"📊 Distance matrix: mean={np.mean(distance_matrix):.2f}km, max={np.max(distance_matrix):.2f}km")
         logger.info(f"📊 Edge weights: finite edges={np.sum(~np.isinf(edge_weights))}/{n*m}")
@@ -519,39 +521,21 @@ class PricingExperimentRunner:
         return distance_matrix, edge_weights
     
     def calculate_acceptance_probability_hikima(self, prices: np.ndarray, trip_amounts: np.ndarray, acceptance_function: str) -> np.ndarray:
-        """Calculate acceptance probabilities using Hikima's exact formulas."""
+        """Calculate acceptance probabilities using EXACT Hikima formulas from their implementation."""
         if acceptance_function == 'PL':
-            # Piecewise Linear function from Hikima paper:
-            # p^PL_u(x) = 1 if x < qu
-            #           = -1/((α-1)*qu) * x + α/(α-1) if qu ≤ x ≤ α*qu  
-            #           = 0 if x > α*qu
-            # where α = 1.5, qu = trip_amount
-            alpha = 1.5
-            qu = trip_amounts  # qu is the actually paid amount from dataset
-            
-            acceptance_probs = np.zeros_like(prices)
-            
-            # Case 1: x < qu
-            mask1 = prices < qu
-            acceptance_probs[mask1] = 1.0
-            
-            # Case 2: qu ≤ x ≤ α*qu
-            mask2 = (prices >= qu) & (prices <= alpha * qu)
-            acceptance_probs[mask2] = (-1.0 / ((alpha - 1) * qu[mask2])) * prices[mask2] + alpha / (alpha - 1)
-            
-            # Case 3: x > α*qu (already initialized to 0)
+            # EXACT Hikima PL formula from their code:
+            # Acceptance_probability_proposed=-2.0/df_requesters[:,4]*price_proposed+3
+            acceptance_probs = -2.0 / trip_amounts * prices + 3.0
             
         elif acceptance_function == 'Sigmoid':
-            # Sigmoid function from Hikima paper:
-            # p^Sig_u(x) = 1 - 1/(1 + exp(-(x - β*qu)/(γ*|qu|)))
-            # where β = 1.3, γ = 0.3*√3/π
+            # EXACT Hikima Sigmoid formula from their code:
+            # Acceptance_probability_proposed=1-(1/(1+np.exp(((-price_proposed+beta*df_requesters[:,4])/(gamma*df_requesters[:,4])).astype(np.float64))))
             beta = 1.3
-            gamma = 0.3 * np.sqrt(3) / np.pi
-            qu = trip_amounts
+            gamma = (0.3 * np.sqrt(3) / np.pi).astype(np.float64)
             
-            exponent = -(prices - beta * qu) / (gamma * np.abs(qu))
+            exponent = ((-prices + beta * trip_amounts) / (gamma * trip_amounts)).astype(np.float64)
             exponent = np.clip(exponent, -50, 50)  # Prevent overflow
-            acceptance_probs = 1 - 1 / (1 + np.exp(exponent))
+            acceptance_probs = 1 - (1 / (1 + np.exp(exponent)))
             
         else:
             raise ValueError(f"Unknown acceptance function: {acceptance_function}")
@@ -1023,11 +1007,11 @@ class PricingExperimentRunner:
         logger.info(f"🔧 Running LinUCB: {n} requests, {len(taxis_df)} taxis")
         
         # Load trained LinUCB model
-        model_key = f"models/linucb/{vehicle_type}_{borough}_201907/trained_model.json"
+        model_key = f"models/linucb/{vehicle_type}_{borough}_201907/trained_model.pkl"
         
         try:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=model_key)
-            model_data = json.loads(response['Body'].read().decode('utf-8'))
+            model_data = pickle.loads(response['Body'].read())
             
             # Extract model parameters
             A_matrices = {int(k): np.array(v) for k, v in model_data['A_matrices'].items()}

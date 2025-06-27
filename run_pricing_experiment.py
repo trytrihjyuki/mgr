@@ -165,7 +165,7 @@ Examples:
             return True
         
         # Check if training data exists in S3
-        training_key = f"models/linucb/{args.vehicle_type}_{args.borough}_{args.training_period.replace('-', '')}/trained_model.pkl"
+        training_key = f"models/linucb/{args.vehicle_type}_{args.borough}_201907/trained_model.pkl"
         
         try:
             self.s3_client.head_object(Bucket=self.bucket_name, Key=training_key)
