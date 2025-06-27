@@ -23,19 +23,27 @@ aws s3 ls s3://magisterka/models/linucb/yellow_Manhattan_201907/
 ### 3. Run Experiment
 ```bash
 # Standard Hikima experiment (120 scenarios: 10:00-20:00, 5min intervals)
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=6 \
   --borough=Manhattan --vehicle_type=yellow \
   --eval=PL,Sigmoid --methods=LP,MinMaxCostFlow,LinUCB,MAPS \
-  --parallel=20 --skip_training
+  --parallel=3 --skip_training
 
 # Custom time window (240 scenarios: 10:00-12:00, 30s intervals)  
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=1 \
   --borough=Manhattan --vehicle_type=green \
   --eval=PL --methods=LP \
   --hour_start=10 --hour_end=12 --time_interval=30 --time_unit=s \
-  --parallel=10 --skip_training
+  --parallel=2 --skip_training
+
+# Hikima consistency check (warnings for non-standard parameters)
+python run_pricing_experiment.py \
+  --year=2019 --month=10 --day=1 \
+  --borough=Manhattan --vehicle_type=yellow \
+  --eval=PL --methods=LP \
+  --hour_start=9 --hour_end=17 --time_interval=15 \
+  --dry_run
 ```
 
 ## Framework Components

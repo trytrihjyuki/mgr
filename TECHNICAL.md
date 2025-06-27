@@ -137,11 +137,11 @@ python prepare_hikima_matrices.py
 #### **Single Method Testing**
 ```bash
 # Test LP method only (fastest validation)
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=1 \
   --borough=Manhattan --vehicle_type=yellow \
   --eval=PL --methods=LP \
-  --parallel=5 --skip_training
+  --parallel=3 --skip_training
 
 # Expected output:
 # 📊 Hikima Configuration: 10:00-20:00, 5min intervals = 120 scenarios/day
@@ -151,11 +151,11 @@ python run_pricing_experiment_optimized.py \
 #### **Full Algorithm Comparison**
 ```bash
 # Run all 4 methods with both evaluation functions
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=6 \
   --borough=Manhattan --vehicle_type=yellow \
   --eval=PL,Sigmoid --methods=LP,MinMaxCostFlow,LinUCB,MAPS \
-  --parallel=20 --skip_training
+  --parallel=2 --skip_training
 
 # Performance expectations:
 # - LP: ~3-5 scenarios/second
@@ -167,22 +167,22 @@ python run_pricing_experiment_optimized.py \
 #### **Custom Time Windows**
 ```bash
 # High-frequency analysis (30-second intervals)
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=1 \
   --borough=Manhattan --vehicle_type=green \
   --eval=PL --methods=LP \
   --hour_start=14 --hour_end=16 --time_interval=30 --time_unit=s \
-  --parallel=10 --skip_training
+  --parallel=3 --skip_training
 
 # Result: 240 scenarios (2 hours × 120 per hour)
 
 # Low-frequency analysis (15-minute intervals)
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=1 \
   --borough=Queens --vehicle_type=yellow \
   --eval=Sigmoid --methods=MAPS \
   --hour_start=8 --hour_end=20 --time_interval=15 --time_unit=m \
-  --parallel=5 --skip_training
+  --parallel=3 --skip_training
 
 # Result: 48 scenarios (12 hours × 4 per hour)
 ```
@@ -192,12 +192,12 @@ python run_pricing_experiment_optimized.py \
 # Process multiple days efficiently
 for day in {1..7}; do
     echo "Processing day ${day}"
-    python run_pricing_experiment_optimized.py \
+    python run_pricing_experiment.py \
       --year=2019 --month=10 --day=${day} \
       --borough=Manhattan --vehicle_type=yellow \
       --eval=PL,Sigmoid --methods=LP,LinUCB \
-      --parallel=25 --skip_training \
-      --production_mode
+      --parallel=3 --skip_training \
+      --production
 done
 ```
 
@@ -275,7 +275,7 @@ aws s3api head-object --bucket magisterka --key datasets/yellow/year=2019/month=
 aws s3 ls s3://magisterka/models/linucb/yellow_Manhattan_201907/
 
 # Force training if needed (takes 10-20 minutes)
-python run_pricing_experiment_optimized.py \
+python run_pricing_experiment.py \
   --year=2019 --month=10 --day=1 \
   --borough=Manhattan --vehicle_type=yellow \
   --eval=PL --methods=LinUCB \
