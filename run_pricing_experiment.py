@@ -122,11 +122,25 @@ class ExperimentRunner:
         try:
             success, result = self.invoke_lambda_with_retry(scenario_params, scenario_id)
             
+            # Extract S3 location if available
+            s3_location = None
+            if success and isinstance(result, dict):
+                body_str = result.get('body', '{}')
+                if isinstance(body_str, str):
+                    try:
+                        body_data = json.loads(body_str)
+                        s3_location = body_data.get('s3_location')
+                    except json.JSONDecodeError:
+                        pass
+            
             with self.lock:
                 if success:
                     self.success_count += 1
                     if not self.production_mode:
-                        print(f"   ✅ {scenario_id}: Success")
+                        if s3_location:
+                            print(f"   ✅ {scenario_id}: Success -> {s3_location}")
+                        else:
+                            print(f"   ✅ {scenario_id}: Success")
                 else:
                     self.error_count += 1
                     error_msg = result.get('error', 'Unknown error')
@@ -143,6 +157,7 @@ class ExperimentRunner:
                 'scenario_id': scenario_id,
                 'success': success,
                 'result': result,
+                's3_location': s3_location,
                 'timestamp': datetime.now().isoformat()
             }
             
@@ -153,6 +168,7 @@ class ExperimentRunner:
                 'scenario_id': scenario_id,
                 'success': False,
                 'result': {'error': str(e)},
+                's3_location': None,
                 'timestamp': datetime.now().isoformat()
             }
 
@@ -464,6 +480,24 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     print(f"   ✅ Successful: {len(successful_results)}/{total_scenarios}")
     print(f"   ❌ Failed: {len(failed_results)}/{total_scenarios}")
     
+    # Aggregate and display S3 paths by day
+    s3_paths_by_day = {}
+    for result in successful_results:
+        s3_location = result.get('s3_location')
+        if s3_location:
+            # Extract day from scenario_id (format: day{day:02d}_{eval_func}_s{scenario_idx:03d})
+            scenario_id = result.get('scenario_id', '')
+            if scenario_id.startswith('day'):
+                day_part = scenario_id.split('_')[0]  # Extract "day01", "day06", etc.
+                if day_part not in s3_paths_by_day:
+                    s3_paths_by_day[day_part] = s3_location
+    
+    if s3_paths_by_day:
+        print(f"\n💾 S3 EXPERIMENT RESULTS:")
+        for day_part, s3_path in sorted(s3_paths_by_day.items()):
+            day_num = day_part.replace('day', '').lstrip('0') or '1'  # Remove leading zeros
+            print(f"   📅 Day {day_num}: {s3_path}")
+    
     if failed_results:
         print(f"\n❌ FAILED SCENARIOS:")
         for result in failed_results[:10]:  # Show first 10
@@ -479,6 +513,7 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
         print("⚠️ Low success rate - consider reducing --parallel or checking Lambda limits")
         return 1
     
+    print(f"\n🎉 Experiment completed! Check S3 paths above for results.")
     return 0
 
 if __name__ == '__main__':

@@ -1297,9 +1297,18 @@ class PricingExperimentRunner:
                 end_minute -= 60
             time_end = f"{end_hour:02d}:{end_minute:02d}"
             
-            # Day-level S3 key with requested structure: s3://magisterka/experiments/type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/<day_of_execution>_<trainingid>.json
+            # Day-level S3 key with requested structure: s3://magisterka/experiments/type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/20250627_20250627_225627.json
+            # Note: training_id already contains the timestamp, so we just need execution_day prefix
             execution_day = datetime.now().strftime('%Y%m%d')
-            s3_key = f"experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}/{execution_day}_{training_id}.json"
+            # Extract timestamp from training_id to avoid redundancy 
+            # training_id format: exp_yellow_Manhattan_20250627_225627 -> we want: 20250627_20250627_225627
+            if '_' in training_id:
+                timestamp_part = '_'.join(training_id.split('_')[-2:])  # Get last two parts (date_time)
+                filename = f"{execution_day}_{timestamp_part}.json"
+            else:
+                filename = f"{execution_day}_{training_id}.json"
+            
+            s3_key = f"experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}/{filename}"
             
             # Try to load existing day data
             existing_data = self.load_existing_day_data(s3_key)
