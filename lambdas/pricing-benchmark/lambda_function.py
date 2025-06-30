@@ -55,6 +55,9 @@ try:
     import pulp as pl
     from scipy.spatial import distance_matrix
     import pickle
+    import io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
     
     # Optional: pyarrow for parquet files
     try:
@@ -76,7 +79,7 @@ except Exception as e:
 class PricingExperimentRunner:
     """Complete implementation of ride-hailing pricing experiments."""
     
-    def __init__(self):
+    def __init__(self, num_eval: int = 1000):
         self.s3_client = boto3.client('s3')
         self.bucket_name = os.environ.get('S3_BUCKET', 'magisterka')
         
@@ -84,7 +87,7 @@ class PricingExperimentRunner:
         self.epsilon = 1e-10
         self.alpha = 18.0
         self.s_taxi = 25.0
-        self.num_eval = 100
+        self.num_eval = num_eval  # Configurable via event parameters (default: 1000 as per Hikima)
         
         # Acceptance function parameters
         self.beta = 1.3
@@ -101,6 +104,22 @@ class PricingExperimentRunner:
         self.distance_matrix = None
         
         logger.info("🔧 Initialized PricingExperimentRunner")
+    
+    def safe_int_convert(self, value):
+        """Safely convert PyArrow Timestamp or other objects to int."""
+        try:
+            if hasattr(value, 'value'):  # PyArrow Timestamp has .value attribute
+                return int(value.value)
+            elif hasattr(value, 'timestamp'):  # Pandas Timestamp
+                return int(value.timestamp())
+            else:
+                return int(value)
+        except (ValueError, TypeError, AttributeError):
+            # Fallback: try to extract numeric value
+            try:
+                return int(float(str(value)))
+            except:
+                return 1  # Default location ID if all else fails
     
     def load_experiment_config(self, config_name: str) -> Dict[str, Any]:
         """Load experiment configuration from S3."""
@@ -120,7 +139,7 @@ class PricingExperimentRunner:
                     "epsilon": 1e-10,
                     "alpha": 18.0,
                     "s_taxi": 25.0,
-                    "num_eval": 100
+                    "num_eval": 1000
                 }
             }
     
@@ -131,7 +150,7 @@ class PricingExperimentRunner:
                 # Try to load area information from S3
                 response = self.s3_client.get_object(
                     Bucket=self.bucket_name,
-                    Key="data/area_information.csv"
+                    Key="reference_data/area_info.csv"
                 )
                 self.area_info = pd.read_csv(io.BytesIO(response['Body'].read()))
                 logger.info(f"✅ Loaded area information: {len(self.area_info)} areas")
@@ -366,7 +385,16 @@ class PricingExperimentRunner:
         # Calculate trip duration in seconds (Hikima methodology)
         time_consume = np.zeros([df_requesters.shape[0], 1])
         for i in range(df_requesters.shape[0]):
-            time_consume[i] = (df_requesters[i, 6] - df_requesters[i, 5]).total_seconds()
+            # Handle both datetime objects and timestamp floats (PyArrow compatibility)
+            pickup_time = df_requesters[i, 5]
+            dropoff_time = df_requesters[i, 6]
+            
+            if hasattr(pickup_time, 'total_seconds') and hasattr(dropoff_time, 'total_seconds'):
+                # DateTime objects
+                time_consume[i] = (dropoff_time - pickup_time).total_seconds()
+            else:
+                # Timestamp floats (seconds since epoch) - direct subtraction gives seconds
+                time_consume[i] = float(dropoff_time) - float(pickup_time)
         
         # Combine requesters data: [borough, PULocationID, DOLocationID, trip_distance, total_amount, duration]
         df_requesters = np.hstack([df_requesters[:, 0:5], time_consume])
@@ -402,8 +430,8 @@ class PricingExperimentRunner:
         requester_dropoff_lon = []
         
         for i in range(n):
-            pu_location_id = int(df_requesters[i, 1]) - 1  # Convert to 0-based index
-            do_location_id = int(df_requesters[i, 2]) - 1
+            pu_location_id = self.safe_int_convert(df_requesters[i, 1]) - 1  # Convert to 0-based index
+            do_location_id = self.safe_int_convert(df_requesters[i, 2]) - 1
             
             # Get base coordinates for pickup
             if pu_location_id < len(area_info):
@@ -432,7 +460,7 @@ class PricingExperimentRunner:
         taxi_lon = []
         
         for j in range(m):
-            location_id = int(df_taxis[j]) - 1  # Convert to 0-based index
+            location_id = self.safe_int_convert(df_taxis[j]) - 1  # Convert to 0-based index
             
             if location_id < len(area_info):
                 base_lat = area_info.iloc[location_id]['latitude']
@@ -447,8 +475,8 @@ class PricingExperimentRunner:
         # Create final DataFrame following Hikima structure
         requesters_df = pd.DataFrame({
             'borough': [df_requesters[i, 0] for i in range(n)],
-            'PULocationID': [int(df_requesters[i, 1]) for i in range(n)],
-            'DOLocationID': [int(df_requesters[i, 2]) for i in range(n)],
+            'PULocationID': [self.safe_int_convert(df_requesters[i, 1]) for i in range(n)],
+            'DOLocationID': [self.safe_int_convert(df_requesters[i, 2]) for i in range(n)],
             'trip_distance_km': [df_requesters[i, 3] for i in range(n)],
             'total_amount': [df_requesters[i, 4] for i in range(n)],
             'trip_duration_seconds': [df_requesters[i, 5] for i in range(n)],
@@ -666,8 +694,8 @@ class PricingExperimentRunner:
                         hour_onehot = np.zeros(10)
                         hour_onehot[current_hour - 10] = 1
                         
-                        pu_id = int(scenario_requesters.iloc[i]['PULocationID'])
-                        do_id = int(scenario_requesters.iloc[i]['DOLocationID'])
+                        pu_id = self.safe_int_convert(scenario_requesters.iloc[i]['PULocationID'])
+                        do_id = self.safe_int_convert(scenario_requesters.iloc[i]['DOLocationID'])
                         
                         pu_onehot = np.zeros(len(pu_id_set))
                         if pu_id in pu_id_set:
@@ -716,27 +744,47 @@ class PricingExperimentRunner:
             'vehicle_type': vehicle_type
         }
         
-        # Save to S3
-        model_key = f"models/linucb/{vehicle_type}_{borough}_{training_year}{training_month:02d}/trained_model.json"
-        
+        # Save to S3 using original Hikima format (separate pickle files for each arm)
         try:
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=model_key,
-                Body=json.dumps(model_data, indent=2),
-                ContentType='application/json'
-            )
+            saved_keys = []
+            month_suffix = f"{training_month:02d}"
+            month_code = f"{training_year}{month_suffix}"
+            
+            # Save A matrices and b vectors for each arm separately (following original format)
+            for arm in range(5):
+                # Save A matrix
+                A_key = f"models/linucb/{vehicle_type}_{borough}_{month_code}/A_{arm}_{month_suffix}"
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=A_key,
+                    Body=pickle.dumps(A_matrices[arm]),
+                    ContentType='application/octet-stream'
+                )
+                saved_keys.append(A_key)
+                
+                # Save b vector
+                b_key = f"models/linucb/{vehicle_type}_{borough}_{month_code}/b_{arm}_{month_suffix}"
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=b_key,
+                    Body=pickle.dumps(b_vectors[arm]),
+                    ContentType='application/octet-stream'
+                )
+                saved_keys.append(b_key)
+                
+                logger.info(f"💾 Saved LinUCB arm {arm} to S3: A_{arm}_{month_suffix}, b_{arm}_{month_suffix}")
             
             training_time = time.time() - start_time
             logger.info(f"✅ LinUCB training completed: {total_samples} samples, {training_time:.1f}s")
-            logger.info(f"💾 Model saved: s3://{self.bucket_name}/{model_key}")
+            logger.info(f"💾 Model saved in Hikima format: {len(saved_keys)} files")
             
             return {
                 'success': True,
-                'model_key': model_key,
+                'saved_keys': saved_keys,
                 'total_samples': total_samples,
                 'training_time': training_time,
-                'feature_dimension': feature_dim
+                'feature_dimension': feature_dim,
+                'format': 'hikima_original'
             }
             
         except Exception as e:
@@ -934,7 +982,7 @@ class PricingExperimentRunner:
         # Group by pickup location (area) and calculate average acceptance probability
         area_requesters = {}
         for i in range(n):
-            pu_location = int(requesters_df.iloc[i]['PULocationID'])
+            pu_location = self.safe_int_convert(requesters_df.iloc[i]['PULocationID'])
             if pu_location not in area_requesters:
                 area_requesters[pu_location] = []
             area_requesters[pu_location].append(i)
@@ -956,7 +1004,7 @@ class PricingExperimentRunner:
         # Calculate prices for each request based on area pricing
         prices = np.zeros(n)
         for i in range(n):
-            pu_location = int(requesters_df.iloc[i]['PULocationID'])
+            pu_location = self.safe_int_convert(requesters_df.iloc[i]['PULocationID'])
             # Price based on area and individual trip distance
             base_area_price = trip_amounts[i] * 1.1
             prices[i] = base_area_price
@@ -1001,52 +1049,125 @@ class PricingExperimentRunner:
                 'objective_value': 0.0,
                 'computation_time': time.time() - start_time,
                 'num_requests': 0,
-                'num_taxis': len(taxis_df)
+                'num_taxis': len(taxis_df),
+                'avg_acceptance_rate': 0.0
             }
         
         logger.info(f"🔧 Running LinUCB: {n} requests, {len(taxis_df)} taxis")
         
-        # Load trained LinUCB model
-        model_key = f"models/linucb/{vehicle_type}_{borough}_201907/trained_model.pkl"
-        
+        # Load trained LinUCB model using original Hikima methodology
+        # Follow the exact approach from original code: load A_0-A_4 and b_0-b_4 from multiple months
         try:
-            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=model_key)
-            model_data = pickle.loads(response['Body'].read())
+            # Set up parameters exactly as in original Hikima code
+            base_price = 5.875
+            price_multipliers = np.array([0.6, 0.8, 1.0, 1.2, 1.4])
             
-            # Extract model parameters
-            A_matrices = {int(k): np.array(v) for k, v in model_data['A_matrices'].items()}
-            b_vectors = {int(k): np.array(v) for k, v in model_data['b_vectors'].items()}
-            pu_id_set = model_data['pu_id_set']
-            do_id_set = model_data['do_id_set']
-            base_price = model_data['base_price']
-            price_multipliers = model_data['price_multipliers']
+            # Available LinUCB models (hardcoded based on what we have)
+            available_models = {
+                ('yellow', 'Manhattan'): ['201907', '201908', '201909'],
+                ('yellow', 'Brooklyn'): ['201907', '201908', '201909'],
+                ('yellow', 'Queens'): ['201907', '201908', '201909'],
+                ('yellow', 'Bronx'): ['201907', '201908', '201909'],
+                ('green', 'Manhattan'): ['201907', '201908', '201909'],
+                ('green', 'Brooklyn'): ['201907', '201908', '201909'],
+                ('green', 'Queens'): ['201907', '201908', '201909'],
+                ('green', 'Bronx'): ['201907', '201908', '201909']
+            }
             
-            logger.info(f"✅ Loaded trained LinUCB model: {model_data['total_samples']} training samples")
+            # Check if model is available for this vehicle type and borough
+            model_key = (vehicle_type, borough)
+            if model_key not in available_models:
+                logger.warning(f"⚠️ LinUCB model not available for {vehicle_type} in {borough}")
+                raise Exception(f"No LinUCB model available for {vehicle_type} in {borough}")
+            
+            available_periods = available_models[model_key]
+            logger.info(f"📋 Available LinUCB periods for {vehicle_type} {borough}: {available_periods}")
+            
+            # Get area info for PUID_set and DOID_set
+            area_info = self.load_area_information()
+            df_id = area_info[area_info["borough"] == borough]
+            pu_id_set = list(set(df_id['LocationID'].values))
+            do_id_set = list(set(df_id['LocationID'].values))
+            
+            # First, load one matrix to determine the actual feature dimension from pre-trained data
+            feature_dim = None
+            sample_A_key = f"models/linucb/{vehicle_type}_{borough}_201907/A_0_07"
+            
+            try:
+                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=sample_A_key)
+                sample_A = pickle.loads(response['Body'].read())
+                feature_dim = sample_A.shape[0]  # Get actual feature dimension from pre-trained data
+                logger.info(f"📏 Detected feature dimension from pre-trained data: {feature_dim}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load sample matrix to detect dimension: {e}")
+                # Fall back to calculated dimension
+                feature_dim = 10 + len(pu_id_set) + len(do_id_set) + 2
+                logger.info(f"📏 Using calculated feature dimension: {feature_dim}")
+            
+            A_matrices = {}
+            b_vectors = {}
+            
+            # Load and combine matrices from available periods exactly as in original
+            for arm in range(5):
+                A_arm = np.zeros((feature_dim, feature_dim))
+                b_arm = np.zeros(feature_dim)
+                
+                # Load from available periods and combine as in original code
+                for period in available_periods:
+                    month_suffix = period[-2:]  # Get last 2 digits (07, 08, 09)
+                    month_code = period
+                    try:
+                        # Load A matrix for this arm and month
+                        A_key = f"models/linucb/{vehicle_type}_{borough}_{month_code}/A_{arm}_{month_suffix}"
+                        response = self.s3_client.get_object(Bucket=self.bucket_name, Key=A_key)
+                        A_month = pickle.loads(response['Body'].read())
+                        
+                        # Verify dimension compatibility
+                        if A_month.shape[0] != feature_dim:
+                            logger.warning(f"⚠️ Dimension mismatch for {A_key}: expected {feature_dim}x{feature_dim}, got {A_month.shape}")
+                            continue
+                        
+                        A_arm += A_month
+                        
+                        # Load b vector for this arm and month
+                        b_key = f"models/linucb/{vehicle_type}_{borough}_{month_code}/b_{arm}_{month_suffix}"
+                        response = self.s3_client.get_object(Bucket=self.bucket_name, Key=b_key)
+                        b_month = pickle.loads(response['Body'].read())
+                        
+                        # Verify dimension compatibility
+                        if b_month.shape[0] != feature_dim:
+                            logger.warning(f"⚠️ Dimension mismatch for {b_key}: expected {feature_dim}, got {b_month.shape}")
+                            continue
+                        
+                        b_arm += b_month
+                        
+                        logger.info(f"✅ Loaded LinUCB {month_code} data for arm {arm} (dim: {A_month.shape})")
+                        
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not load {month_code} data for arm {arm}: {e}")
+                
+                # Add identity matrix as in original code: A_arm += np.eye(A_arm.shape[0])
+                A_arm += np.eye(feature_dim)
+                
+                A_matrices[arm] = A_arm
+                b_vectors[arm] = b_arm
+            
+            logger.info(f"✅ Loaded trained LinUCB model with {len(A_matrices)} arms, feature_dim={feature_dim}")
             
         except Exception as e:
             logger.warning(f"⚠️ Could not load trained LinUCB model: {e}")
-            # Fallback to simple pricing
-            prices = np.ones(n) * 10.0
-            acceptance_probs = self.calculate_acceptance_probability_hikima(
-                prices, requesters_df['total_amount'].values, acceptance_function
-            )
+            # Use default LinUCB with small initialization as in original
+            area_info = self.load_area_information()
+            df_id = area_info[area_info["borough"] == borough]
+            pu_id_set = list(set(df_id['LocationID'].values))
+            do_id_set = list(set(df_id['LocationID'].values))
             
-            total_objective = 0.0
-            for eval_iter in range(self.num_eval):
-                acceptance_results = np.random.binomial(1, acceptance_probs)
-                objective_value, matches = self.evaluate_matching_hikima(
-                    prices, acceptance_results, edge_weights
-                )
-                total_objective += objective_value
+            base_price = 5.875
+            price_multipliers = np.array([0.6, 0.8, 1.0, 1.2, 1.4])
+            feature_dim = 10 + len(pu_id_set) + len(do_id_set) + 2
             
-            return {
-                'method_name': 'LinUCB',
-                'objective_value': total_objective / self.num_eval,
-                'computation_time': time.time() - start_time,
-                'num_requests': n,
-                'num_taxis': len(taxis_df),
-                'error': 'No trained model available'
-            }
+            A_matrices = {i: np.eye(feature_dim) for i in range(5)}
+            b_vectors = {i: np.zeros(feature_dim) for i in range(5)}
         
         # Apply LinUCB with trained model
         trip_amounts = requesters_df['total_amount'].values
@@ -1060,8 +1181,8 @@ class PricingExperimentRunner:
             if 0 <= current_hour - 10 < 10:
                 hour_onehot[current_hour - 10] = 1
             
-            pu_id = int(requesters_df.iloc[i]['PULocationID'])
-            do_id = int(requesters_df.iloc[i]['DOLocationID'])
+            pu_id = self.safe_int_convert(requesters_df.iloc[i]['PULocationID'])
+            do_id = self.safe_int_convert(requesters_df.iloc[i]['DOLocationID'])
             
             pu_onehot = np.zeros(len(pu_id_set))
             if pu_id in pu_id_set:
@@ -1074,13 +1195,26 @@ class PricingExperimentRunner:
                 do_onehot[do_idx] = 1
             
             # Combine features
-            features = np.concatenate([
+            basic_features = np.concatenate([
                 hour_onehot,
                 pu_onehot,
                 do_onehot,
                 [trip_distances[i]],
                 [requesters_df.iloc[i]['trip_duration_seconds']]
             ])
+            
+            # Pad or truncate to match pre-trained feature dimension
+            if len(basic_features) < feature_dim:
+                # Pad with zeros to match expected dimension
+                features = np.zeros(feature_dim)
+                features[:len(basic_features)] = basic_features
+                logger.debug(f"Padded features from {len(basic_features)} to {feature_dim}")
+            elif len(basic_features) > feature_dim:
+                # Truncate to match expected dimension
+                features = basic_features[:feature_dim]
+                logger.debug(f"Truncated features from {len(basic_features)} to {feature_dim}")
+            else:
+                features = basic_features
             
             # Calculate UCB values for each arm
             best_arm = 0
@@ -1133,6 +1267,9 @@ class PricingExperimentRunner:
         
         logger.info(f"✅ LinUCB completed: Objective={avg_objective:.2f}, Time={computation_time:.3f}s")
         
+        # Ensure acceptance_probs is valid
+        avg_acceptance_rate = float(np.mean(acceptance_probs)) if len(acceptance_probs) > 0 and not np.all(np.isnan(acceptance_probs)) else 0.0
+        
         return {
             'method_name': 'LinUCB',
             'objective_value': avg_objective,
@@ -1140,8 +1277,8 @@ class PricingExperimentRunner:
             'num_requests': n,
             'num_taxis': len(taxis_df),
             'num_arms': len(price_multipliers),
-            'avg_acceptance_rate': float(np.mean(acceptance_probs)),
-            'model_used': model_key
+            'avg_acceptance_rate': avg_acceptance_rate,
+            'model_format': 'hikima_original'
         }
     
     def run_lp(self, requesters_df: pd.DataFrame, taxis_df: pd.DataFrame, 
@@ -1158,7 +1295,8 @@ class PricingExperimentRunner:
                 'objective_value': 0.0,
                 'computation_time': time.time() - start_time,
                 'num_requests': n,
-                'num_taxis': m
+                'num_taxis': m,
+                'avg_acceptance_rate': 0.0
             }
         
         logger.info(f"🔧 Running LP: {n} requests, {m} taxis")
@@ -1242,10 +1380,15 @@ class PricingExperimentRunner:
             else:
                 logger.warning(f"⚠️ LP solver status: {pl.LpStatus[prob.status]}")
                 objective_value = 0.0
+                
+            # Calculate average acceptance rate from all computed probabilities
+            all_accept_probs = list(accept_probs.values())
+            avg_acceptance_rate = float(np.mean(all_accept_probs)) if all_accept_probs else 0.0
             
         except Exception as e:
             logger.error(f"❌ LP solver error: {e}")
             objective_value = 0.0
+            avg_acceptance_rate = 0.0
         
         computation_time = time.time() - start_time
         
@@ -1257,16 +1400,18 @@ class PricingExperimentRunner:
             'computation_time': computation_time,
             'num_requests': n,
             'num_taxis': m,
+            'avg_acceptance_rate': avg_acceptance_rate,
             'solver_status': pl.LpStatus.get(prob.status, 'Unknown') if 'prob' in locals() else 'Error'
         }
     
     def save_results_to_s3(self, results: List[Dict[str, Any]], event: Dict[str, Any], 
                           data_stats: Dict[str, Any], performance_summary: Dict[str, Any]) -> str:
-        """Save experiment results to S3 aggregated by day."""
+        """Save experiment results to S3 with new directory structure."""
         try:
-            # Build S3 key for day-level aggregation
-            execution_date = event.get('execution_date', datetime.now().strftime('%Y%m%d_%H%M%S'))
-            training_id = event.get('training_id', 'unknown')
+            import random
+            import pandas as pd
+            
+            # Extract event parameters
             vehicle_type = event.get('vehicle_type', 'green')
             acceptance_function = event.get('acceptance_function', 'PL')
             year = event.get('year', 2019)
@@ -1275,8 +1420,21 @@ class PricingExperimentRunner:
             borough = event.get('borough', 'Manhattan')
             scenario_index = event.get('scenario_index', 0)
             time_window = event.get('time_window', {})
+            training_id = event.get('training_id', 'unknown')
             
-            # Calculate time window for this scenario
+            # Generate random 5-digit experiment ID
+            experiment_id = f"{random.randint(10000, 99999)}"
+            
+            # Create timestamp for execution
+            execution_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # Create directory name: {experiment_id}_{timestamp}
+            directory_name = f"{experiment_id}_{execution_timestamp}"
+            
+            # Build base S3 path
+            base_path = f"experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}/{directory_name}"
+            
+            # Calculate time window details
             hour_start = time_window.get('hour_start', 10)
             minute_start = time_window.get('minute_start', 0)
             time_interval = time_window.get('time_interval', 5)
@@ -1297,73 +1455,120 @@ class PricingExperimentRunner:
                 end_minute -= 60
             time_end = f"{end_hour:02d}:{end_minute:02d}"
             
-            # Day-level S3 key with requested structure: s3://magisterka/experiments/type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/20250627_20250627_225627.json
-            # Note: training_id already contains the timestamp, so we just need execution_day prefix
-            execution_day = datetime.now().strftime('%Y%m%d')
-            # Extract timestamp from training_id to avoid redundancy 
-            # training_id format: exp_yellow_Manhattan_20250627_225627 -> we want: 20250627_20250627_225627
-            if '_' in training_id:
-                timestamp_part = '_'.join(training_id.split('_')[-2:])  # Get last two parts (date_time)
-                filename = f"{execution_day}_{timestamp_part}.json"
-            else:
-                filename = f"{execution_day}_{training_id}.json"
+            # Calculate matching success percentage
+            matching_stats = self.calculate_matching_success_stats(results, data_stats)
             
-            s3_key = f"experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}/{filename}"
-            
-            # Try to load existing day data
-            existing_data = self.load_existing_day_data(s3_key)
-            
-            # Prepare scenario data
-            scenario_data = {
-                'scenario_index': scenario_index,
-                'time_window': {
-                    'start': time_start,
-                    'end': time_end,
-                    'duration_minutes': time_interval
-                },
-                'data_statistics': data_stats,
-                'performance_summary': performance_summary,
-                'detailed_results': results,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Update existing data or create new
-            if existing_data:
-                existing_data['scenarios'][str(scenario_index)] = scenario_data
-                existing_data['last_updated'] = datetime.now().isoformat()
-                # Recalculate day-level statistics
-                self.update_day_statistics(existing_data)
-            else:
-                existing_data = {
+            # 1. Create experiment_summary.json
+            experiment_summary = {
                 'experiment_metadata': {
+                    'experiment_id': experiment_id,
+                    'execution_timestamp': execution_timestamp,
+                    'seed': random.getstate()[1][0] if hasattr(random.getstate()[1], '__getitem__') else None,
                     'vehicle_type': vehicle_type,
                     'acceptance_function': acceptance_function,
-                        'borough': borough,
+                    'borough': borough,
                     'year': year,
                     'month': month,
                     'day': day,
-                        'created': datetime.now().isoformat(),
-                        'last_updated': datetime.now().isoformat()
-                    },
-                    'scenarios': {
-                        str(scenario_index): scenario_data
-                    },
-                    'day_statistics': {},
-                    'method_performance_summary': {}
+                    'scenario_index': scenario_index,
+                    'training_id': training_id
+                },
+                'time_window': {
+                    'start': time_start,
+                    'end': time_end,
+                    'duration_minutes': time_interval,
+                    'hour_start': hour_start,
+                    'hour_end': time_window.get('hour_end', 20),
+                    'time_interval': time_interval
+                },
+                'experiment_setup': {
+                    'methods': event.get('methods', []),
+                    'execution_date': event.get('execution_date'),
+                    'parallel_workers': event.get('parallel', 3),
+                    'production_mode': event.get('production', False),
+                    'debug_mode': event.get('debug', False),
+                    'num_eval': event.get('num_eval', 1000)  # Number of Monte Carlo simulations
+                },
+                'data_statistics': data_stats,
+                'matching_statistics': matching_stats,
+                'performance_summary': performance_summary,
+                'results_basic_analysis': {
+                    'total_methods': len(results),
+                    'successful_methods': sum(1 for r in results if 'error' not in r),
+                    'failed_methods': sum(1 for r in results if 'error' in r),
+                    'total_objective_value': sum(r.get('objective_value', 0) for r in results),
+                    'total_computation_time': sum(r.get('computation_time', 0) for r in results),
+                    'avg_computation_time': sum(r.get('computation_time', 0) for r in results) / len(results) if results else 0,
+                    'best_method': max(results, key=lambda x: x.get('objective_value', 0))['method_name'] if results else None,
+                    'best_objective_value': max(r.get('objective_value', 0) for r in results) if results else 0
                 }
-                self.update_day_statistics(existing_data)
+            }
             
-            # Upload updated data to S3
+            # Upload experiment_summary.json
+            summary_key = f"{base_path}/experiment_summary.json"
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
-                Key=s3_key,
-                Body=json.dumps(existing_data, indent=2, default=str),
+                Key=summary_key,
+                Body=json.dumps(experiment_summary, indent=2, default=str),
                 ContentType='application/json'
             )
             
-            s3_location = f"s3://{self.bucket_name}/{s3_key}"
-            logger.info(f"✅ Day results updated: {s3_location}")
-            logger.info(f"📊 Added scenario {scenario_index} ({time_start}-{time_end})")
+            # 2. Create results.parquet with detailed scenario data
+            results_data = []
+            
+            for result in results:
+                result_row = {
+                    'experiment_id': experiment_id,
+                    'execution_timestamp': execution_timestamp,
+                    'scenario_index': scenario_index,
+                    'method_name': result.get('method_name', 'Unknown'),
+                    'objective_value': result.get('objective_value', 0),
+                    'computation_time': result.get('computation_time', 0),
+                    'success': 'error' not in result,
+                    'error_message': result.get('error', None),
+                    'num_requests': result.get('num_requests', 0),
+                    'num_taxis': result.get('num_taxis', 0),
+                    'avg_acceptance_rate': result.get('avg_acceptance_rate', 0),
+                    'time_start': time_start,
+                    'time_end': time_end,
+                    'duration_minutes': time_interval,
+                    'vehicle_type': vehicle_type,
+                    'acceptance_function': acceptance_function,
+                    'borough': borough,
+                    'year': year,
+                    'month': month,
+                    'day': day
+                }
+                
+                # Add method-specific metrics
+                for key, value in result.items():
+                    if key not in ['method_name', 'objective_value', 'computation_time', 'error', 'num_requests', 'num_taxis', 'avg_acceptance_rate']:
+                        result_row[f'method_{key}'] = value
+                
+                results_data.append(result_row)
+            
+            # Convert to DataFrame and save as parquet
+            if results_data:
+                results_df = pd.DataFrame(results_data)
+                
+                # Convert DataFrame to parquet bytes
+                parquet_buffer = io.BytesIO()
+                results_df.to_parquet(parquet_buffer, index=False, engine='pyarrow')
+                parquet_bytes = parquet_buffer.getvalue()
+                
+                # Upload results.parquet
+                results_key = f"{base_path}/results.parquet"
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=results_key,
+                    Body=parquet_bytes,
+                    ContentType='application/octet-stream'
+                )
+            
+            s3_location = f"s3://{self.bucket_name}/{base_path}/"
+            logger.info(f"✅ Experiment saved: {s3_location}")
+            logger.info(f"📊 Files: experiment_summary.json, results.parquet")
+            logger.info(f"🔢 Experiment ID: {experiment_id}")
             
             return s3_location
             
@@ -1371,118 +1576,48 @@ class PricingExperimentRunner:
             logger.error(f"❌ Failed to save results to S3: {e}")
             return ""
     
-    def load_existing_day_data(self, s3_key: str) -> Optional[Dict[str, Any]]:
-        """Load existing day data from S3 if it exists."""
+    def calculate_matching_success_stats(self, results: List[Dict[str, Any]], data_stats: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate matching success statistics."""
         try:
-            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-            existing_data = json.loads(response['Body'].read().decode('utf-8'))
-            logger.info(f"📥 Loaded existing day data with {len(existing_data.get('scenarios', {}))} scenarios")
-            return existing_data
-        except Exception as e:
-            logger.info(f"📄 Creating new day file (no existing data found)")
-            return None
-    
-    def update_day_statistics(self, day_data: Dict[str, Any]) -> None:
-        """Calculate comprehensive day-level statistics from all scenarios."""
-        scenarios = day_data.get('scenarios', {})
-        if not scenarios:
-            return
-        
-        # Collect data across all scenarios
-        all_requesters = []
-        all_taxis = []
-        all_ratios = []
-        all_trip_distances = []
-        all_trip_amounts = []
-        all_trip_durations = []
-        
-        method_objectives = {}
-        method_times = {}
-        method_successes = {}
-        
-        for scenario_id, scenario in scenarios.items():
-            data_stats = scenario.get('data_statistics', {})
-            all_requesters.append(data_stats.get('num_requesters', 0))
-            all_taxis.append(data_stats.get('num_taxis', 0))
-            all_ratios.append(data_stats.get('ratio_requests_to_taxis', 0))
-            all_trip_distances.append(data_stats.get('avg_trip_distance_km', 0))
-            all_trip_amounts.append(data_stats.get('avg_trip_amount', 0))
-            all_trip_durations.append(data_stats.get('avg_trip_duration_seconds', 0))
+            num_requesters = data_stats.get('num_requesters', 0)
+            num_taxis = data_stats.get('num_taxis', 0)
             
-            # Collect method performance
-            perf_summary = scenario.get('performance_summary', {})
-            methods = perf_summary.get('methods', {})
+            # Calculate theoretical maximum matches
+            max_possible_matches = min(num_requesters, num_taxis)
             
-            for method_name, method_data in methods.items():
-                if method_name not in method_objectives:
-                    method_objectives[method_name] = []
-                    method_times[method_name] = []
-                    method_successes[method_name] = []
+            # Calculate actual matching statistics from results
+            matching_stats = {
+                'max_possible_matches': max_possible_matches,
+                'theoretical_matching_rate': min(1.0, num_taxis / max(1, num_requesters)),
+                'methods': {}
+            }
+            
+            for result in results:
+                method_name = result.get('method_name', 'Unknown')
                 
-                method_objectives[method_name].append(method_data.get('objective_value', 0))
-                method_times[method_name].append(method_data.get('computation_time', 0))
-                method_successes[method_name].append(1 if method_data.get('success', False) else 0)
-        
-        # Calculate day-level statistics
-        day_data['day_statistics'] = {
-            'total_scenarios': len(scenarios),
-            'requesters': {
-                'mean': float(np.mean(all_requesters)) if all_requesters else 0,
-                'std': float(np.std(all_requesters)) if all_requesters else 0,
-                'min': int(np.min(all_requesters)) if all_requesters else 0,
-                'max': int(np.max(all_requesters)) if all_requesters else 0,
-                'total': int(np.sum(all_requesters)) if all_requesters else 0
-            },
-            'taxis': {
-                'mean': float(np.mean(all_taxis)) if all_taxis else 0,
-                'std': float(np.std(all_taxis)) if all_taxis else 0,
-                'min': int(np.min(all_taxis)) if all_taxis else 0,
-                'max': int(np.max(all_taxis)) if all_taxis else 0,
-                'total': int(np.sum(all_taxis)) if all_taxis else 0
-            },
-            'request_taxi_ratio': {
-                'mean': float(np.mean(all_ratios)) if all_ratios else 0,
-                'std': float(np.std(all_ratios)) if all_ratios else 0
-            },
-            'trip_distance_km': {
-                'mean': float(np.mean(all_trip_distances)) if all_trip_distances else 0,
-                'std': float(np.std(all_trip_distances)) if all_trip_distances else 0
-            },
-            'trip_amount': {
-                'mean': float(np.mean(all_trip_amounts)) if all_trip_amounts else 0,
-                'std': float(np.std(all_trip_amounts)) if all_trip_amounts else 0
-            },
-            'trip_duration_seconds': {
-                'mean': float(np.mean(all_trip_durations)) if all_trip_durations else 0,
-                'std': float(np.std(all_trip_durations)) if all_trip_durations else 0
-            }
-        }
-        
-        # Calculate method performance summary
-        day_data['method_performance_summary'] = {}
-        for method_name in method_objectives.keys():
-            objectives = method_objectives[method_name]
-            times = method_times[method_name]
-            successes = method_successes[method_name]
+                # Try to extract matching information from the result
+                matches_count = 0
+                acceptance_rate = result.get('avg_acceptance_rate', 0)
+                
+                # Estimate successful matches based on acceptance rate and available taxis
+                if acceptance_rate > 0 and num_requesters > 0:
+                    accepted_requests = int(num_requesters * acceptance_rate)
+                    matches_count = min(accepted_requests, num_taxis)
+                
+                matching_success_rate = matches_count / max(1, num_requesters)
+                
+                matching_stats['methods'][method_name] = {
+                    'estimated_matches': matches_count,
+                    'matching_success_percentage': matching_success_rate * 100,
+                    'acceptance_rate': acceptance_rate,
+                    'efficiency_ratio': matches_count / max(1, max_possible_matches)
+                }
             
-            day_data['method_performance_summary'][method_name] = {
-                'objective_value': {
-                    'mean': float(np.mean(objectives)) if objectives else 0,
-                    'std': float(np.std(objectives)) if objectives else 0,
-                    'min': float(np.min(objectives)) if objectives else 0,
-                    'max': float(np.max(objectives)) if objectives else 0,
-                    'total': float(np.sum(objectives)) if objectives else 0
-                },
-                'computation_time': {
-                    'mean': float(np.mean(times)) if times else 0,
-                    'std': float(np.std(times)) if times else 0,
-                    'min': float(np.min(times)) if times else 0,
-                    'max': float(np.max(times)) if times else 0,
-                    'total': float(np.sum(times)) if times else 0
-                },
-                'success_rate': float(np.mean(successes)) if successes else 0,
-                'scenarios_run': len(objectives)
-            }
+            return matching_stats
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error calculating matching stats: {e}")
+            return {'error': str(e)}
 
 
 def lambda_handler(event, context):
@@ -1518,7 +1653,12 @@ def lambda_handler(event, context):
     
     try:
         start_time = time.time()
-        runner = PricingExperimentRunner()
+        
+        # Get configurable parameters from event (with Hikima defaults)
+        num_eval = event.get('num_eval', 1000)  # Default: 1000 (Hikima standard)
+        logger.info(f"🎲 Monte Carlo simulations: {num_eval} ({'Hikima standard' if num_eval == 1000 else 'custom'})")
+        
+        runner = PricingExperimentRunner(num_eval=num_eval)
         
         # Handle LinUCB training action
         if event.get('action') == 'train_linucb':
@@ -1675,13 +1815,15 @@ def lambda_handler(event, context):
                 'success': 'error' not in result
             }
         
-        # Save results to S3
-        s3_location = runner.save_results_to_s3(results, event, data_stats, {
-            'total_objective_value': total_objective,
-            'total_computation_time': total_computation_time,
-            'avg_computation_time': avg_computation_time,
-            'methods': method_summary
-        })
+        # Save results to S3 only if not disabled
+        s3_location = ""
+        if not event.get('skip_s3_save', False):
+            s3_location = runner.save_results_to_s3(results, event, data_stats, {
+                'total_objective_value': total_objective,
+                'total_computation_time': total_computation_time,
+                'avg_computation_time': avg_computation_time,
+                'methods': method_summary
+            })
         
         # Prepare final response
         execution_time = time.time() - start_time

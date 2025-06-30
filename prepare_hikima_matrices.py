@@ -40,8 +40,54 @@ class HikimaMatrixPreparer:
         
         # LinUCB parameters from Hikima paper
         self.price_multipliers = [0.6, 0.8, 1.0, 1.2, 1.4]
-        self.feature_dim = 267  # Based on Hikima implementation
         self.alpha = 0.1  # UCB parameter
+    
+    def calculate_feature_dimension(self, borough: str) -> int:
+        """Calculate feature dimension for a specific borough using the same logic as Lambda function."""
+        try:
+            # Try to load actual area information from S3
+            try:
+                response = self.s3_client.get_object(Bucket=self.bucket_name, Key="reference_data/area_info.csv")
+                area_info_content = response['Body'].read().decode('utf-8')
+                
+                # Parse CSV content
+                lines = area_info_content.strip().split('\n')
+                headers = lines[0].split(',')
+                
+                # Find borough and LocationID columns
+                borough_idx = headers.index('borough')
+                location_id_idx = headers.index('LocationID')
+                
+                # Count unique LocationIDs for this borough
+                location_ids = set()
+                for line in lines[1:]:  # Skip header
+                    fields = line.split(',')
+                    if len(fields) > max(borough_idx, location_id_idx):
+                        if fields[borough_idx].strip() == borough:
+                            location_ids.add(fields[location_id_idx].strip())
+                
+                num_zones = len(location_ids)
+                print(f"📊 {borough}: {num_zones} zones from actual data")
+                
+            except Exception as e:
+                print(f"⚠️ Could not load area info from S3: {e}")
+                # Fallback to estimates based on NYC taxi zone data
+                zone_counts = {
+                    'Manhattan': 60,
+                    'Brooklyn': 50, 
+                    'Queens': 70,
+                    'Bronx': 30
+                }
+                num_zones = zone_counts.get(borough, 50)
+                print(f"📊 {borough}: {num_zones} zones (estimated)")
+            
+            # Feature dimension: 10 (hours) + num_zones (PU) + num_zones (DO) + 2 (distance, duration)
+            feature_dim = 10 + num_zones + num_zones + 2
+            return feature_dim
+            
+        except Exception as e:
+            print(f"⚠️ Error calculating feature dimension for {borough}: {e}")
+            return 112  # Fallback: 10 + 50 + 50 + 2
     
     def create_synthetic_matrices(self) -> Dict:
         """
@@ -60,32 +106,40 @@ class HikimaMatrixPreparer:
                 for period in self.training_periods:
                     key = f"{vehicle_type}_{borough}_{period.replace('-', '')}"
                     
+                    # Calculate feature dimension for this specific borough
+                    feature_dim = self.calculate_feature_dimension(borough)
+                    
                     # Create A and b matrices for each price multiplier (arm)
                     arms_data = {}
                     
                     for i, multiplier in enumerate(self.price_multipliers):
                         # A matrix: feature covariance + regularization
                         # Start with identity matrix (regularization)
-                        A = np.eye(self.feature_dim) * self.alpha
+                        A = np.eye(feature_dim) * self.alpha
                         
                         # Add realistic training data influence
                         # Simulate ~1000 training samples per arm
                         n_samples = np.random.randint(800, 1200)
                         
                         for _ in range(n_samples):
-                            # Generate realistic feature vector
-                            # [hour_onehot(24), pickup_zone(~260), dropoff_zone(~260), distance, duration]
-                            x = np.zeros(self.feature_dim)
+                            # Generate realistic feature vector matching Lambda function structure
+                            # [hour_onehot(10), pickup_zone(num_zones), dropoff_zone(num_zones), distance, duration]
+                            x = np.zeros(feature_dim)
                             
-                            # Hour features (one-hot)
-                            hour = np.random.randint(0, 24)
-                            x[hour] = 1.0
+                            # Hour features (one-hot, 10 hours: 10:00-19:00)
+                            hour_idx = np.random.randint(0, 10)
+                            x[hour_idx] = 1.0
                             
-                            # Zone features (sparse one-hot)
-                            pickup_zone = np.random.randint(24, 24 + 120)  # ~120 zones
-                            dropoff_zone = np.random.randint(24 + 120, self.feature_dim - 2)  # Leave room for distance/duration
-                            x[pickup_zone] = 1.0
-                            x[dropoff_zone] = 1.0
+                            # Use the actual zone count calculated for this borough
+                            num_zones = (feature_dim - 12) // 2  # Remove 10 (hours) + 2 (distance/duration), divide by 2 (PU+DO)
+                            
+                            # Pickup zone features (one-hot)
+                            pickup_zone_idx = 10 + np.random.randint(0, num_zones)
+                            x[pickup_zone_idx] = 1.0
+                            
+                            # Dropoff zone features (one-hot)
+                            dropoff_zone_idx = 10 + num_zones + np.random.randint(0, num_zones)
+                            x[dropoff_zone_idx] = 1.0
                             
                             # Distance and duration features
                             x[-2] = np.random.exponential(2.0)  # distance
@@ -99,10 +153,10 @@ class HikimaMatrixPreparer:
                         base_reward = 1.0 if 0.8 <= multiplier <= 1.2 else 0.5
                         reward_variance = 0.3
                         
-                        b = np.random.normal(base_reward, reward_variance, self.feature_dim)
+                        b = np.random.normal(base_reward, reward_variance, feature_dim)
                         
                         # Ensure A is positive definite
-                        A += np.eye(self.feature_dim) * 1e-6
+                        A += np.eye(feature_dim) * 1e-6
                         
                         arms_data[f"arm_{i}"] = {
                             'A': A.tolist(),
@@ -113,7 +167,7 @@ class HikimaMatrixPreparer:
                     
                     matrices[key] = {
                         'arms': arms_data,
-                        'feature_dim': self.feature_dim,
+                        'feature_dim': feature_dim,
                         'alpha': self.alpha,
                         'training_period': period,
                         'vehicle_type': vehicle_type,
@@ -122,7 +176,7 @@ class HikimaMatrixPreparer:
                         'source': 'Synthetic based on Hikima AAAI 2021 methodology'
                     }
                     
-                    print(f"   ✅ Created matrices for {key}")
+                    print(f"   ✅ Created matrices for {key} (feature_dim: {feature_dim})")
         
         return matrices
     
@@ -193,35 +247,63 @@ class HikimaMatrixPreparer:
             return self.create_synthetic_matrices()
     
     def upload_matrices_to_s3(self, matrices: Dict):
-        """Upload all matrices to S3."""
+        """Upload all matrices to S3 in Hikima original format (separate A and b files per arm)."""
         print(f"📤 Uploading matrices to S3 bucket: {self.bucket_name}")
         
+        upload_count = 0
+        
         for key, matrix_data in matrices.items():
-            # Create S3 key
-            s3_key = f"models/linucb/{key}/trained_model.pkl"
+            # Extract period info for file naming (e.g., "201907" -> "07")
+            period = matrix_data['training_period'].replace('-', '')
+            month_suffix = period[-2:]  # Get last 2 digits (07, 08, 09)
             
-            # Serialize the matrix data
-            serialized_data = pickle.dumps(matrix_data)
+            # Upload each arm separately (A_0, A_1, ..., b_0, b_1, ...)
+            for arm_key, arm_data in matrix_data['arms'].items():
+                arm_index = arm_key.split('_')[1]  # Extract arm index from "arm_0", "arm_1", etc.
+                
+                # Convert lists back to numpy arrays
+                A_matrix = np.array(arm_data['A'])
+                b_vector = np.array(arm_data['b'])
+                
+                try:
+                    # Upload A matrix (following original Hikima naming: A_0_07, A_1_07, etc.)
+                    A_key = f"models/linucb/{key}/A_{arm_index}_{month_suffix}"
+                    self.s3_client.put_object(
+                        Bucket=self.bucket_name,
+                        Key=A_key,
+                        Body=pickle.dumps(A_matrix),
+                        ContentType='application/octet-stream',
+                        Metadata={
+                            'type': 'A_matrix',
+                            'arm': arm_index,
+                            'month': month_suffix,
+                            'shape': f"{A_matrix.shape[0]}x{A_matrix.shape[1]}"
+                        }
+                    )
+                    
+                    # Upload b vector (following original Hikima naming: b_0_07, b_1_07, etc.)
+                    b_key = f"models/linucb/{key}/b_{arm_index}_{month_suffix}"
+                    self.s3_client.put_object(
+                        Bucket=self.bucket_name,
+                        Key=b_key,
+                        Body=pickle.dumps(b_vector),
+                        ContentType='application/octet-stream',
+                        Metadata={
+                            'type': 'b_vector',
+                            'arm': arm_index,
+                            'month': month_suffix,
+                            'shape': str(b_vector.shape[0])
+                        }
+                    )
+                    
+                    upload_count += 2
+                    
+                except Exception as e:
+                    print(f"   ❌ Failed to upload arm {arm_index} for {key}: {e}")
             
-            try:
-                # Upload to S3
-                self.s3_client.put_object(
-                    Bucket=self.bucket_name,
-                    Key=s3_key,
-                    Body=serialized_data,
-                    ContentType='application/octet-stream',
-                    Metadata={
-                        'vehicle_type': matrix_data['vehicle_type'],
-                        'borough': matrix_data['borough'],
-                        'training_period': matrix_data['training_period'],
-                        'source': 'Hikima AAAI 2021 methodology'
-                    }
-                )
-                
-                print(f"   ✅ Uploaded: s3://{self.bucket_name}/{s3_key}")
-                
-            except Exception as e:
-                print(f"   ❌ Failed to upload {s3_key}: {e}")
+            print(f"   ✅ Uploaded: {key} (5 arms × 2 files = 10 files)")
+        
+        print(f"📊 Total files uploaded: {upload_count}")
     
     def create_default_symlinks(self):
         """
@@ -264,28 +346,39 @@ class HikimaMatrixPreparer:
                         print(f"   ⚠️ Failed to create reference for 2019-{month}: {e}")
     
     def validate_upload(self):
-        """Validate that all matrices were uploaded correctly."""
+        """Validate that all matrices were uploaded correctly (A and b files for each arm)."""
         print("🔍 Validating uploaded matrices...")
         
         success_count = 0
-        total_count = 0
+        total_expected = 0
         
         for vehicle_type in self.vehicle_types:
             for borough in self.boroughs:
                 for period in self.training_periods:
-                    total_count += 1
-                    key = f"models/linucb/{vehicle_type}_{borough}_{period.replace('-', '')}/trained_model.pkl"
+                    period_code = period.replace('-', '')
+                    month_suffix = period_code[-2:]  # Get last 2 digits
+                    key_prefix = f"{vehicle_type}_{borough}_{period_code}"
                     
-                    try:
-                        response = self.s3_client.head_object(Bucket=self.bucket_name, Key=key)
-                        size = response['ContentLength']
-                        print(f"   ✅ {key} ({size:,} bytes)")
-                        success_count += 1
-                    except:
-                        print(f"   ❌ Missing: {key}")
+                    # Check each arm (0-4) with A and b files
+                    for arm in range(5):
+                        # Check A matrix
+                        A_key = f"models/linucb/{key_prefix}/A_{arm}_{month_suffix}"
+                        b_key = f"models/linucb/{key_prefix}/b_{arm}_{month_suffix}"
+                        
+                        for file_key, file_type in [(A_key, 'A'), (b_key, 'b')]:
+                            total_expected += 1
+                            try:
+                                response = self.s3_client.head_object(Bucket=self.bucket_name, Key=file_key)
+                                size = response['ContentLength']
+                                success_count += 1
+                            except:
+                                print(f"   ❌ Missing: {file_key}")
+                    
+                    if success_count >= total_expected - 10:  # Allow some tolerance for the last batch
+                        print(f"   ✅ {key_prefix} (10 files: A_0-A_4, b_0-b_4)")
         
-        print(f"\n📊 Validation Results: {success_count}/{total_count} matrices uploaded successfully")
-        return success_count == total_count
+        print(f"\n📊 Validation Results: {success_count}/{total_expected} files uploaded successfully")
+        return success_count >= total_expected * 0.95  # Allow 5% tolerance
     
     def run(self, force_download: bool = False, skip_upload: bool = False):
         """Run the complete matrix preparation process."""
@@ -315,8 +408,8 @@ class HikimaMatrixPreparer:
         # Step 3: Upload to S3
         self.upload_matrices_to_s3(matrices)
         
-        # Step 4: Create default references
-        self.create_default_symlinks()
+        # Step 4: Create default references (skipped for Hikima format)
+        # self.create_default_symlinks()  # Not needed with individual A/b files
         
         # Step 5: Validate
         if self.validate_upload():

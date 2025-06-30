@@ -39,6 +39,9 @@ import threading
 from typing import List, Dict, Any, Tuple
 import random
 import sys
+import pandas as pd
+import numpy as np
+import io
 
 # Configure logging
 logging.basicConfig(
@@ -223,6 +226,321 @@ class ExperimentRunner:
         print(f"   📈 Average Rate: {total_scenarios/elapsed:.1f} scenarios/s")
         
         return results
+    
+    def aggregate_and_save_results(self, results: List[Dict[str, Any]], args, training_id: str) -> Dict[str, str]:
+        """Aggregate all scenario results and save them by day to S3 in the requested format."""
+        print(f"\n📊 AGGREGATING RESULTS BY DAY...")
+        
+        # Group results by day and eval function
+        results_by_day_eval = {}
+        
+        for result in results:
+            if not result['success']:
+                continue
+                
+            scenario_id = result['scenario_id']
+            lambda_result = result['result']
+            
+            # Parse scenario_id: day{day:02d}_{eval_func}_s{scenario_idx:03d}
+            parts = scenario_id.split('_')
+            if len(parts) >= 3:
+                day_part = parts[0]  # day01, day06, etc.
+                eval_func = parts[1]  # PL, Sigmoid
+                scenario_idx = int(parts[2][1:])  # s000 -> 0
+                
+                day_num = int(day_part[3:])  # day01 -> 1
+                
+                key = (day_num, eval_func)
+                if key not in results_by_day_eval:
+                    results_by_day_eval[key] = []
+                
+                # Add scenario data with Lambda result
+                scenario_data = {
+                    'scenario_id': scenario_id,
+                    'scenario_index': scenario_idx,
+                    'lambda_result': lambda_result,
+                    'timestamp': result['timestamp']
+                }
+                results_by_day_eval[key].append(scenario_data)
+        
+        saved_paths = {}
+        
+        # Save aggregated results for each day+eval combination
+        for (day_num, eval_func), day_scenarios in results_by_day_eval.items():
+            if not day_scenarios:
+                continue
+                
+            print(f"   📅 Processing Day {day_num}, Eval: {eval_func} ({len(day_scenarios)} scenarios)")
+            
+            # Generate experiment ID and timestamp for this day's experiment
+            experiment_id = f"{random.randint(10000, 99999)}"
+            execution_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # Create S3 path
+            base_path = f"experiments/type={args.vehicle_type}/eval={eval_func}/borough={args.borough}/year={args.year}/month={args.month:02d}/day={day_num:02d}/{experiment_id}_{execution_timestamp}"
+            
+            # Aggregate experiment metadata
+            experiment_summary = {
+                'experiment_metadata': {
+                    'experiment_id': experiment_id,
+                    'execution_timestamp': execution_timestamp,
+                    'seed': random.getstate()[1][0] if hasattr(random.getstate()[1], '__getitem__') else None,
+                    'vehicle_type': args.vehicle_type,
+                    'acceptance_function': eval_func,
+                    'borough': args.borough,
+                    'year': args.year,
+                    'month': args.month,
+                    'day': day_num,
+                    'training_id': training_id,
+                    'total_scenarios': len(day_scenarios)
+                },
+                'experiment_setup': {
+                    'methods': args.methods,
+                    'hour_start': args.hour_start,
+                    'hour_end': args.hour_end,
+                    'time_interval': args.time_interval,
+                    'time_unit': args.time_unit,
+                    'parallel_workers': args.parallel,
+                    'production_mode': args.production,
+                    'execution_date': datetime.now().strftime('%Y%m%d_%H%M%S'),
+                    'num_eval': args.num_eval  # Number of Monte Carlo simulations per scenario
+                },
+                'aggregated_statistics': {},
+                'results_basic_analysis': {}
+            }
+            
+            # Collect all results data for parquet
+            results_data = []
+            all_data_stats = []
+            all_matching_stats = []
+            method_results = {}
+            
+            for scenario_data in day_scenarios:
+                lambda_result = scenario_data['lambda_result']
+                
+                # Extract data from lambda result
+                if isinstance(lambda_result, dict) and 'body' in lambda_result:
+                    # Parse the body if it's a string
+                    body_data = json.loads(lambda_result['body']) if isinstance(lambda_result['body'], str) else lambda_result['body']
+                else:
+                    body_data = lambda_result
+                
+                # Extract statistics
+                data_statistics = body_data.get('data_statistics', {})
+                experiment_metadata = body_data.get('experiment_metadata', {})
+                performance_summary = body_data.get('performance_summary', {})
+                
+                all_data_stats.append(data_statistics)
+                
+                # Extract individual method results
+                method_results_this_scenario = body_data.get('results', [])
+                for method_result in method_results_this_scenario:
+                    method_name = method_result.get('method_name', 'Unknown')
+                    if method_name not in method_results:
+                        method_results[method_name] = []
+                    
+                    # Add scenario context to method result
+                    result_row = {
+                        'experiment_id': experiment_id,
+                        'execution_timestamp': execution_timestamp,
+                        'scenario_index': scenario_data['scenario_index'],
+                        'scenario_id': scenario_data['scenario_id'],
+                        'method_name': method_name,
+                        'objective_value': method_result.get('objective_value', 0),
+                        'computation_time': method_result.get('computation_time', 0),
+                        'success': 'error' not in method_result,
+                        'error_message': method_result.get('error', None),
+                        'num_requests': method_result.get('num_requests', 0),
+                        'num_taxis': method_result.get('num_taxis', 0),
+                        'avg_acceptance_rate': method_result.get('avg_acceptance_rate', 0),
+                        'vehicle_type': args.vehicle_type,
+                        'acceptance_function': eval_func,
+                        'borough': args.borough,
+                        'year': args.year,
+                        'month': args.month,
+                        'day': day_num,
+                        **{f'method_{k}': v for k, v in method_result.items() 
+                           if k not in ['method_name', 'objective_value', 'computation_time', 'error', 'num_requests', 'num_taxis', 'avg_acceptance_rate']}
+                    }
+                    
+                    method_results[method_name].append(result_row)
+                    results_data.append(result_row)
+            
+            # Calculate comprehensive aggregated statistics
+            if all_data_stats:
+                
+                # Extract all numerical data for statistical analysis
+                requesters_counts = [d.get('num_requesters', 0) for d in all_data_stats]
+                taxis_counts = [d.get('num_taxis', 0) for d in all_data_stats]
+                trip_distances = [d.get('avg_trip_distance_km', 0) for d in all_data_stats]
+                trip_amounts = [d.get('avg_trip_amount', 0) for d in all_data_stats]
+                ratios = [d.get('ratio_requests_to_taxis', 0) for d in all_data_stats]
+                
+                def safe_stats(data_list):
+                    """Calculate comprehensive statistics safely for countable data."""
+                    if not data_list or all(x == 0 for x in data_list):
+                        return {'mean': 0, 'median': 0, 'std': 0, 'min': 0, 'max': 0, 'sum': 0}
+                    return {
+                        'mean': float(np.mean(data_list)),
+                        'median': float(np.median(data_list)),
+                        'std': float(np.std(data_list)),
+                        'min': float(np.min(data_list)),
+                        'max': float(np.max(data_list)),
+                        'sum': float(np.sum(data_list))
+                    }
+                
+                def safe_ratio_stats(data_list):
+                    """Calculate statistics for ratios/rates (sum doesn't make sense)."""
+                    if not data_list or all(x == 0 for x in data_list):
+                        return {'mean': 0, 'median': 0, 'std': 0, 'min': 0, 'max': 0}
+                    return {
+                        'mean': float(np.mean(data_list)),
+                        'median': float(np.median(data_list)),
+                        'std': float(np.std(data_list)),
+                        'min': float(np.min(data_list)),
+                        'max': float(np.max(data_list))
+                    }
+                
+                experiment_summary['aggregated_statistics'] = {
+                    'total_scenarios': len(day_scenarios),
+                    'requesters': safe_stats(requesters_counts),
+                    'taxis': safe_stats(taxis_counts),
+                    'trip_distances_km': safe_stats(trip_distances),
+                    'trip_amounts': safe_stats(trip_amounts),
+                    'request_taxi_ratios': safe_ratio_stats(ratios),
+                    'data_availability': {
+                        'scenarios_with_data': sum(1 for d in all_data_stats if d.get('num_requesters', 0) > 0),
+                        'scenarios_without_data': sum(1 for d in all_data_stats if d.get('num_requesters', 0) == 0),
+                        'data_coverage_percentage': (sum(1 for d in all_data_stats if d.get('num_requesters', 0) > 0) / len(all_data_stats) * 100) if all_data_stats else 0
+                    }
+                }
+                
+                # Calculate comprehensive method performance summary
+                experiment_summary['results_basic_analysis'] = {
+                    'total_methods': len(args.methods),
+                    'total_method_executions': len(results_data),
+                    'successful_executions': sum(1 for r in results_data if r['success']),
+                    'failed_executions': sum(1 for r in results_data if not r['success']),
+                    'methods_performance': {}
+                }
+                
+                # Overall objective value analysis across all methods
+                all_objectives = [r['objective_value'] for r in results_data if r['success']]
+                all_computation_times = [r['computation_time'] for r in results_data if r['success']]
+                all_acceptance_rates = [r['avg_acceptance_rate'] for r in results_data if r['success']]
+                
+                if all_objectives:
+                    experiment_summary['results_basic_analysis']['overall_performance'] = {
+                        'objective_values': safe_stats(all_objectives),
+                        'computation_times': safe_stats(all_computation_times),
+                        'acceptance_rates': safe_ratio_stats(all_acceptance_rates)
+                    }
+                
+                # Detailed per-method analysis
+                for method_name, method_data in method_results.items():
+                    if method_data:
+                        objectives = [r['objective_value'] for r in method_data]
+                        times = [r['computation_time'] for r in method_data]
+                        successes = [r['success'] for r in method_data]
+                        acceptance_rates = [r['avg_acceptance_rate'] for r in method_data]
+                        num_requests_list = [r['num_requests'] for r in method_data]
+                        num_taxis_list = [r['num_taxis'] for r in method_data]
+                        
+                        # Calculate pairing/matching statistics
+                        matching_ratios = []
+                        efficiency_ratios = []
+                        for r in method_data:
+                            if r['num_requests'] > 0 and r['num_taxis'] > 0:
+                                max_possible_matches = min(r['num_requests'], r['num_taxis'])
+                                estimated_matches = int(r['num_requests'] * r['avg_acceptance_rate']) if r['avg_acceptance_rate'] > 0 else 0
+                                estimated_matches = min(estimated_matches, r['num_taxis'])
+                                
+                                matching_ratio = estimated_matches / r['num_requests'] if r['num_requests'] > 0 else 0
+                                efficiency_ratio = estimated_matches / max_possible_matches if max_possible_matches > 0 else 0
+                                
+                                matching_ratios.append(matching_ratio)
+                                efficiency_ratios.append(efficiency_ratio)
+                        
+                        experiment_summary['results_basic_analysis']['methods_performance'][method_name] = {
+                            'objective_values': safe_stats(objectives),
+                            'computation_times': safe_stats(times),
+                            'acceptance_rates': safe_ratio_stats(acceptance_rates),
+                            'matching_performance': {
+                                'matching_ratios': safe_ratio_stats(matching_ratios),
+                                'efficiency_ratios': safe_ratio_stats(efficiency_ratios),
+                                'scenarios_with_matches': sum(1 for r in matching_ratios if r > 0),
+                                'scenarios_without_matches': sum(1 for r in matching_ratios if r == 0)
+                            },
+                            'data_characteristics': {
+                                'num_requests': safe_stats(num_requests_list),
+                                'num_taxis': safe_stats(num_taxis_list)
+                            },
+                            'success_rate': sum(successes) / len(successes) if successes else 0,
+                            'scenarios_completed': len(method_data),
+                            'relative_performance': {
+                                'rank_by_objective': 0,  # Will be calculated below
+                                'rank_by_efficiency': 0  # Will be calculated below
+                            }
+                        }
+                
+                # Calculate relative performance rankings
+                method_names = list(experiment_summary['results_basic_analysis']['methods_performance'].keys())
+                if len(method_names) > 1:
+                    # Rank by average objective value
+                    obj_rankings = sorted(method_names, 
+                                        key=lambda m: experiment_summary['results_basic_analysis']['methods_performance'][m]['objective_values']['mean'], 
+                                        reverse=True)
+                    for i, method in enumerate(obj_rankings):
+                        experiment_summary['results_basic_analysis']['methods_performance'][method]['relative_performance']['rank_by_objective'] = i + 1
+                    
+                    # Rank by average efficiency ratio
+                    eff_rankings = sorted(method_names, 
+                                        key=lambda m: experiment_summary['results_basic_analysis']['methods_performance'][m]['matching_performance']['efficiency_ratios']['mean'], 
+                                        reverse=True)
+                    for i, method in enumerate(eff_rankings):
+                        experiment_summary['results_basic_analysis']['methods_performance'][method]['relative_performance']['rank_by_efficiency'] = i + 1
+            
+            # Save to S3
+            try:
+                # 1. Save experiment_summary.json
+                summary_key = f"{base_path}/experiment_summary.json"
+                self.s3_client.put_object(
+                    Bucket='magisterka',
+                    Key=summary_key,
+                    Body=json.dumps(experiment_summary, indent=2, default=str),
+                    ContentType='application/json'
+                )
+                
+                # 2. Save results.parquet (if we have results)
+                if results_data:
+                    results_df = pd.DataFrame(results_data)
+                    
+                    # Convert DataFrame to parquet bytes
+                    parquet_buffer = io.BytesIO()
+                    results_df.to_parquet(parquet_buffer, index=False, engine='pyarrow')
+                    parquet_bytes = parquet_buffer.getvalue()
+                    
+                    # Upload results.parquet
+                    results_key = f"{base_path}/results.parquet"
+                    self.s3_client.put_object(
+                        Bucket='magisterka',
+                        Key=results_key,
+                        Body=parquet_bytes,
+                        ContentType='application/octet-stream'
+                    )
+                
+                s3_location = f"s3://magisterka/{base_path}/"
+                saved_paths[f"day{day_num:02d}_{eval_func}"] = s3_location
+                
+                print(f"   ✅ Saved Day {day_num} {eval_func}: {s3_location}")
+                print(f"      📁 Files: experiment_summary.json, results.parquet")
+                print(f"      🔢 Experiment ID: {experiment_id}")
+                print(f"      📊 Total scenarios: {len(day_scenarios)}, Total method executions: {len(results_data)}")
+                
+            except Exception as e:
+                print(f"   ❌ Failed to save Day {day_num} {eval_func}: {e}")
+        
+        return saved_paths
 
 def create_scenario_parameters(args, training_id: str) -> List[Dict[str, Any]]:
     """Create scenario parameters with Hikima-consistent time windows"""
@@ -275,7 +593,9 @@ def create_scenario_parameters(args, training_id: str) -> List[Dict[str, Any]]:
                     },
                     'methods': args.methods,
                     'training_id': training_id,
-                    'execution_date': execution_date
+                    'execution_date': execution_date,
+                    'skip_s3_save': True,  # Skip individual saves, aggregate at end
+                    'num_eval': args.num_eval  # Configurable number of Monte Carlo simulations
                 }
                 scenarios.append(scenario)
     
@@ -364,6 +684,10 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     parser.add_argument('--skip_training', action='store_true', help='Skip LinUCB training (use pre-trained models)')
     parser.add_argument('--force_training', action='store_true', help='Force LinUCB retraining')
     
+    # Hikima simulation parameters
+    parser.add_argument('--num_eval', type=int, default=1000, 
+                       help='Number of Monte Carlo simulations (default: 1000, Hikima standard)')
+    
     # Execution options
     parser.add_argument('--parallel', type=int, default=3, help='Parallel workers (default: 3)')
     parser.add_argument('--production', action='store_true', help='Production mode (minimal logging)')
@@ -418,6 +742,7 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     print(f"   🔧 Methods: {args.methods}")
     print(f"   ⚡ Parallel Workers: {args.parallel}")
     print(f"   🎛️ Production Mode: {args.production}")
+    print(f"   🎲 Monte Carlo Simulations: {args.num_eval} ({'Hikima standard' if args.num_eval == 1000 else 'custom'})")
     
     # Generate training ID
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -491,23 +816,15 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     print(f"   ✅ Successful: {len(successful_results)}/{total_scenarios}")
     print(f"   ❌ Failed: {len(failed_results)}/{total_scenarios}")
     
-    # Aggregate and display S3 paths by day
-    s3_paths_by_day = {}
-    for result in successful_results:
-        s3_location = result.get('s3_location')
-        if s3_location:
-            # Extract day from scenario_id (format: day{day:02d}_{eval_func}_s{scenario_idx:03d})
-            scenario_id = result.get('scenario_id', '')
-            if scenario_id.startswith('day'):
-                day_part = scenario_id.split('_')[0]  # Extract "day01", "day06", etc.
-                if day_part not in s3_paths_by_day:
-                    s3_paths_by_day[day_part] = s3_location
+    # Aggregate and save results by day
+    saved_paths = {}
+    if successful_results:
+        saved_paths = runner.aggregate_and_save_results(successful_results, args, training_id)
     
-    if s3_paths_by_day:
+    if saved_paths:
         print(f"\n💾 S3 EXPERIMENT RESULTS:")
-        for day_part, s3_path in sorted(s3_paths_by_day.items()):
-            day_num = day_part.replace('day', '').lstrip('0') or '1'  # Remove leading zeros
-            print(f"   📅 Day {day_num}: {s3_path}")
+        for day_eval, s3_path in sorted(saved_paths.items()):
+            print(f"   📅 {day_eval}: {s3_path}")
     
     if failed_results:
         print(f"\n❌ FAILED SCENARIOS:")
