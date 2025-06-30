@@ -21,10 +21,10 @@ cleanup_deployment() {
         echo "✅ Deleted ECR images" || echo "ℹ️ ECR images didn't exist"
     
     # Remove local Docker images
-    docker rmi $ECR_REPO_NAME:$IMAGE_TAG 2>/dev/null && \
+    docker rmi rideshare-pricing-benchmark:$IMAGE_TAG 2>/dev/null && \
         echo "✅ Removed local Docker image" || echo "ℹ️ Local Docker image didn't exist"
     
-    docker rmi $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG 2>/dev/null && \
+    docker rmi $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG 2>/dev/null && \
         echo "✅ Removed tagged Docker image" || echo "ℹ️ Tagged Docker image didn't exist"
 }
 
@@ -37,10 +37,11 @@ fi
 # Configuration
 REGION=${AWS_REGION:-eu-north-1}
 FUNCTION_NAME="rideshare-pricing-benchmark"
+ECR_REPO_NAME="rideshare-pricing-benchmark"
 ROLE_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/lambda-execution-role"
-IMAGE_TAG="pricing-benchmark:latest"
+IMAGE_TAG="latest"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-ECR_REPO="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${FUNCTION_NAME}"
+ECR_REPO="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO_NAME}"
 
 echo "🚀 Deploying Ride-Hailing Pricing Benchmark Lambda Function - Hikima Environment"
 echo "📊 Function: ${FUNCTION_NAME}"
@@ -63,40 +64,55 @@ fi
 
 # Create ECR repository if it doesn't exist
 echo "📦 Setting up ECR repository..."
-if ! aws ecr describe-repositories --repository-names ${FUNCTION_NAME} --region ${REGION} >/dev/null 2>&1; then
-    echo "   Creating ECR repository: ${FUNCTION_NAME}"
-    aws ecr create-repository --repository-name ${FUNCTION_NAME} --region ${REGION}
+if ! aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${REGION} >/dev/null 2>&1; then
+    echo "   Creating ECR repository: ${ECR_REPO_NAME}"
+    aws ecr create-repository --repository-name ${ECR_REPO_NAME} --region ${REGION}
 else
-    echo "   ECR repository already exists: ${FUNCTION_NAME}"
+    echo "   ECR repository already exists: ${ECR_REPO_NAME}"
 fi
 
 # Login to ECR
 echo "🔐 Logging into ECR..."
 aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
 
-# Build the Docker image with platform specification
+# Build the Docker image with platform specification for AWS Lambda compatibility
 echo "🐳 Building Docker image for AWS Lambda (linux/amd64)..."
-docker buildx build \
-    --platform linux/amd64 \
-    --tag ${IMAGE_TAG} \
-    --tag ${ECR_REPO}:latest \
-    --load \
-    .
+
+# Build for AWS Lambda (always linux/amd64)
+echo "🖥️ Building single-architecture image for AWS Lambda compatibility..."
+
+# Force single-architecture build without manifest list and attestations
+if command -v docker buildx >/dev/null 2>&1; then
+    echo "🔧 Using buildx with compatibility flags for AWS Lambda..."
+    docker buildx build \
+        --platform linux/amd64 \
+        --provenance=false \
+        --sbom=false \
+        --output type=docker \
+        --tag rideshare-pricing-benchmark:${IMAGE_TAG} \
+        .
+else
+    echo "🔧 Using standard docker build..."
+    docker build \
+        --platform linux/amd64 \
+        --tag rideshare-pricing-benchmark:${IMAGE_TAG} \
+        .
+fi
 
 if [ $? -ne 0 ]; then
     echo "❌ Docker build failed"
     exit 1
 fi
 
-echo "✅ Built with buildx"
+echo "✅ Docker build completed"
 
 # Verify image architecture
 echo "🔍 Verifying image architecture..."
-docker inspect ${IMAGE_TAG} --format='{{.Architecture}}'
+docker inspect rideshare-pricing-benchmark:${IMAGE_TAG} --format='{{.Architecture}}'
 
-# Tag for ECR
+# Tag for ECR with a clean approach
 echo "📤 Tagging image for ECR..."
-docker tag ${IMAGE_TAG} ${ECR_REPO}:latest
+docker tag rideshare-pricing-benchmark:${IMAGE_TAG} ${ECR_REPO}:latest
 
 # Push the image to ECR
 echo "📤 Pushing image to ECR..."
@@ -109,7 +125,7 @@ fi
 
 # Verify image in ECR
 echo "✅ Verifying image in ECR..."
-aws ecr describe-images --repository-name ${FUNCTION_NAME} --region ${REGION} --query 'imageDetails[0].imageTags[0]' --output text
+aws ecr describe-images --repository-name ${ECR_REPO_NAME} --region ${REGION} --query 'imageDetails[0].imageTags[0]' --output text
 
 # Update or create the Lambda function
 echo "⚡ Creating/updating Lambda function..."

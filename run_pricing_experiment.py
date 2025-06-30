@@ -83,6 +83,12 @@ class ExperimentRunner:
                 
                 if response['StatusCode'] == 200:
                     result = json.loads(response['Payload'].read().decode('utf-8'))
+                    
+                    # Check if Lambda function returned an error (even with 200 status)
+                    if isinstance(result, dict) and 'errorMessage' in result:
+                        error_msg = f"Lambda function error: {result.get('errorType', 'Unknown')} - {result.get('errorMessage', 'No message')}"
+                        return False, {'error': error_msg, 'scenario_id': scenario_id}
+                    
                     return True, result
                 else:
                     error_msg = f"Lambda returned status {response['StatusCode']}"
@@ -122,16 +128,21 @@ class ExperimentRunner:
         try:
             success, result = self.invoke_lambda_with_retry(scenario_params, scenario_id)
             
-            # Extract S3 location if available
+            # Extract S3 location if available - FIXED: Lambda client returns data directly, not in 'body'
             s3_location = None
             if success and isinstance(result, dict):
-                body_str = result.get('body', '{}')
-                if isinstance(body_str, str):
-                    try:
-                        body_data = json.loads(body_str)
-                        s3_location = body_data.get('s3_location')
-                    except json.JSONDecodeError:
-                        pass
+                # First try direct access (Lambda client invocation)
+                s3_location = result.get('s3_location')
+                
+                # Fallback: check if it's in a 'body' field (HTTP API Gateway format)
+                if not s3_location:
+                    body_str = result.get('body', '{}')
+                    if isinstance(body_str, str):
+                        try:
+                            body_data = json.loads(body_str)
+                            s3_location = body_data.get('s3_location')
+                        except json.JSONDecodeError:
+                            pass
             
             with self.lock:
                 if success:

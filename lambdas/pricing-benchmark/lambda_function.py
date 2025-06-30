@@ -630,7 +630,7 @@ class PricingExperimentRunner:
                     trip_distances = scenario_requesters['trip_distance_km'].values
                     trip_amounts = scenario_requesters['total_amount'].values
                     
-        for i in range(n):
+                    for i in range(n):
                         # Randomly select arm for training
                         random_arm = np.random.randint(0, num_arms)
                         
@@ -652,7 +652,7 @@ class PricingExperimentRunner:
                             best_taxi = -1
                             best_reward = -np.inf
                             
-            for j in range(m):
+                            for j in range(m):
                                 if not np.isinf(edge_weights[i, j]):
                                     candidate_reward = price + edge_weights[i, j]
                                     if candidate_reward > best_reward:
@@ -815,11 +815,11 @@ class PricingExperimentRunner:
             
             # Iterative algorithm to find optimal flows
             delta = 1.0
-        trip_amounts = requesters_df['total_amount'].values
+            trip_amounts = requesters_df['total_amount'].values
         
             # Simplified capacity scaling approach following Hikima
             while delta > 0.001:
-        for i in range(n):
+                for i in range(n):
                     # Calculate cost function derivatives for acceptance probability
                     if acceptance_function == 'Sigmoid':
                         # For sigmoid: derive optimal price from flow
@@ -873,15 +873,15 @@ class PricingExperimentRunner:
             acceptance_probs = self.calculate_acceptance_probability_hikima(prices, trip_amounts, acceptance_function)
             
             # Monte Carlo evaluation
-        total_objective = 0.0
-        for eval_iter in range(self.num_eval):
-            acceptance_results = np.random.binomial(1, acceptance_probs)
-            objective_value, matches = self.evaluate_matching_hikima(
+            total_objective = 0.0
+            for eval_iter in range(self.num_eval):
+                acceptance_results = np.random.binomial(1, acceptance_probs)
+                objective_value, matches = self.evaluate_matching_hikima(
                     prices, acceptance_results, edge_weights
-            )
-            total_objective += objective_value
-        
-        avg_objective = total_objective / self.num_eval
+                )
+                total_objective += objective_value
+            
+            avg_objective = total_objective / self.num_eval
             
         except Exception as e:
             logger.error(f"❌ MinMaxCostFlow error: {e}")
@@ -1203,7 +1203,7 @@ class PricingExperimentRunner:
                     
                     for j in range(m):
                         if not np.isinf(edge_weights[i, j]):  # Only create variables for finite edge weights
-                        x_vars[(i, j, price)] = pl.LpVariable(f"x_{i}_{j}_{price}", 0, 1, pl.LpContinuous)
+                            x_vars[(i, j, price)] = pl.LpVariable(f"x_{i}_{j}_{price}", 0, 1, pl.LpContinuous)
             
             # Objective: maximize expected profit
             objective_terms = []
