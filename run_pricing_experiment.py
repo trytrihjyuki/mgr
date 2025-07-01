@@ -78,7 +78,7 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 class ExperimentRunner:
-    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True):
+    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5):
         """Initialize the unified experiment runner with Hikima-consistent defaults"""
         # Configure clients with proper timeouts
         import botocore.config
@@ -102,6 +102,10 @@ class ExperimentRunner:
         self.client_timeout = 850  # 14+ minutes (close to Lambda timeout)
         self.max_retries = 3
         self.base_backoff = 2.0
+        
+        # Batch processing settings for improved performance
+        self.batch_size = max(1, min(batch_size, 10))  # 1-10 scenarios per batch
+        self.use_batch_processing = batch_size > 1
         
     def invoke_lambda_with_retry(self, payload: Dict[str, Any], scenario_id: str) -> Tuple[bool, Dict[str, Any]]:
         """Invoke Lambda with exponential backoff and proper timeout handling"""
@@ -176,6 +180,80 @@ class ExperimentRunner:
                     return False, {'error': str(e), 'scenario_id': scenario_id}
         
         return False, {'error': 'Max retries exceeded', 'scenario_id': scenario_id}
+    
+    def invoke_lambda_batch_with_retry(self, batch_payload: Dict[str, Any], batch_id: str) -> Tuple[bool, Dict[str, Any]]:
+        """Invoke Lambda with batch processing for improved performance"""
+        
+        for attempt in range(self.max_retries):
+            # Check for shutdown before each attempt
+            if shutdown_requested:
+                return False, {'error': 'Shutdown requested during Lambda batch invocation', 'batch_id': batch_id}
+                
+            try:
+                # Add jitter to prevent thundering herd  
+                backoff_time = (self.base_backoff ** attempt) + random.uniform(0, 2) if attempt > 0 else 0
+                if attempt > 0:
+                    if not self.production_mode:
+                        print(f"⏳ {batch_id}: Retrying batch (attempt {attempt+1}) after {backoff_time:.1f}s...")
+                    time.sleep(backoff_time)
+                
+                if not self.production_mode:
+                    print(f"📤 {batch_id}: Invoking Lambda batch ({len(batch_payload['batch_scenarios'])} scenarios, attempt {attempt+1}/{self.max_retries})")
+                
+                # Track Lambda invocation time
+                lambda_start_time = time.time()
+                
+                # Configure client with proper timeout
+                response = self.lambda_client.invoke(
+                    FunctionName='rideshare-pricing-benchmark',
+                    InvocationType='RequestResponse',
+                    Payload=json.dumps(batch_payload)
+                )
+                
+                lambda_duration = time.time() - lambda_start_time
+                
+                if not self.production_mode:
+                    print(f"📥 {batch_id}: Lambda responded in {lambda_duration:.1f}s (status: {response['StatusCode']})")
+                
+                if response['StatusCode'] == 200:
+                    result = json.loads(response['Payload'].read().decode('utf-8'))
+                    
+                    # Check if Lambda function returned an error (even with 200 status)
+                    if isinstance(result, dict) and 'errorMessage' in result:
+                        error_msg = f"Lambda function error: {result.get('errorType', 'Unknown')} - {result.get('errorMessage', 'No message')}"
+                        return False, {'error': error_msg, 'batch_id': batch_id}
+                    
+                    return True, result
+                else:
+                    error_msg = f"Lambda returned status {response['StatusCode']}"
+                    if not self.production_mode:
+                        print(f"⚠️ {batch_id}: {error_msg}")
+                    
+            except Exception as e:
+                error_str = str(e)
+                
+                # Handle specific error types
+                if 'TooManyRequestsException' in error_str or 'Rate Exceeded' in error_str:
+                    if attempt < self.max_retries - 1:
+                        next_backoff = (self.base_backoff ** (attempt + 1)) + random.uniform(0, 2)
+                        if not self.production_mode:
+                            print(f"⏳ {batch_id}: Rate limited, retrying in {next_backoff:.1f}s...")
+                        continue
+                    else:
+                        return False, {'error': 'Rate limit exceeded after retries', 'batch_id': batch_id}
+                        
+                elif 'timeout' in error_str.lower() or 'timed out' in error_str.lower():
+                    if not self.production_mode:
+                        print(f"⏰ {batch_id}: Timeout ({attempt+1}/{self.max_retries}) - Client timeout: {self.client_timeout}s")
+                    if attempt < self.max_retries - 1:
+                        continue
+                    else:
+                        return False, {'error': f'Timeout after retries (client timeout: {self.client_timeout}s)', 'batch_id': batch_id}
+                
+                else:
+                    return False, {'error': str(e), 'batch_id': batch_id}
+        
+        return False, {'error': 'Max retries exceeded', 'batch_id': batch_id}
 
     def process_scenario(self, scenario_params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a single scenario with improved error handling"""
@@ -251,12 +329,125 @@ class ExperimentRunner:
                 's3_location': None,
                 'timestamp': datetime.now().isoformat()
             }
+    
+    def process_batch(self, batch_scenarios: List[Dict[str, Any]], batch_id: str) -> List[Dict[str, Any]]:
+        """Process a batch of scenarios with improved performance"""
+        
+        # Check for shutdown at the start
+        if shutdown_requested:
+            return [{
+                'scenario_id': scenario.get('scenario_id', f'batch_{batch_id}_scenario_{i}'),
+                'success': False,
+                'result': {'error': 'Shutdown requested'},
+                's3_location': None,
+                'timestamp': datetime.now().isoformat()
+            } for i, scenario in enumerate(batch_scenarios)]
+        
+        try:
+            if not self.production_mode:
+                print(f"🚀 Starting batch {batch_id} with {len(batch_scenarios)} scenarios")
+            
+            # Create batch payload
+            batch_payload = {
+                'batch_scenarios': batch_scenarios,
+                'num_eval': batch_scenarios[0].get('num_eval', 1000) if batch_scenarios else 1000
+            }
+            
+            success, result = self.invoke_lambda_batch_with_retry(batch_payload, batch_id)
+            
+            if success and isinstance(result, dict):
+                # Parse Lambda response to extract individual scenario results
+                if result.get('batch_mode') and 'results' in result:
+                    batch_results = []
+                    
+                    for i, scenario_result in enumerate(result['results']):
+                        scenario_id = scenario_result.get('scenario_id', f'batch_{batch_id}_scenario_{i}')
+                        
+                        # Check if scenario was successful
+                        if scenario_result.get('status') == 'success':
+                            s3_location = scenario_result.get('s3_location')
+                            batch_results.append({
+                                'scenario_id': scenario_id,
+                                'success': True,
+                                'result': scenario_result,
+                                's3_location': s3_location,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                            
+                            with self.lock:
+                                self.success_count += 1
+                                if not self.production_mode:
+                                    if s3_location:
+                                        print(f"   ✅ {scenario_id}: Success -> {s3_location}")
+                                    else:
+                                        print(f"   ✅ {scenario_id}: Success")
+                        else:
+                            error_msg = scenario_result.get('error', 'Unknown error')
+                            batch_results.append({
+                                'scenario_id': scenario_id,
+                                'success': False,
+                                'result': {'error': error_msg},
+                                's3_location': None,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                            
+                            with self.lock:
+                                self.error_count += 1
+                                print(f"   ❌ {scenario_id}: {error_msg}")
+                    
+                    with self.lock:
+                        # Progress update
+                        total_processed = self.success_count + self.error_count
+                        elapsed = time.time() - self.start_time
+                        rate = total_processed / elapsed if elapsed > 0 else 0
+                        print(f"⚡ Batch {batch_id}: [{total_processed:3d}/???] ✅{self.success_count} ❌{self.error_count} | Rate: {rate:.1f}/s")
+                    
+                    return batch_results
+                else:
+                    # Handle non-batch response format
+                    error_msg = result.get('error', 'Invalid batch response format')
+                    return [{
+                        'scenario_id': scenario.get('scenario_id', f'batch_{batch_id}_scenario_{i}'),
+                        'success': False,
+                        'result': {'error': error_msg},
+                        's3_location': None,
+                        'timestamp': datetime.now().isoformat()
+                    } for i, scenario in enumerate(batch_scenarios)]
+            else:
+                # Batch failed
+                error_msg = result.get('error', 'Batch processing failed')
+                with self.lock:
+                    self.error_count += len(batch_scenarios)
+                
+                return [{
+                    'scenario_id': scenario.get('scenario_id', f'batch_{batch_id}_scenario_{i}'),
+                    'success': False,
+                    'result': {'error': error_msg},
+                    's3_location': None,
+                    'timestamp': datetime.now().isoformat()
+                } for i, scenario in enumerate(batch_scenarios)]
+                
+        except Exception as e:
+            with self.lock:
+                self.error_count += len(batch_scenarios)
+            
+            return [{
+                'scenario_id': scenario.get('scenario_id', f'batch_{batch_id}_scenario_{i}'),
+                'success': False,
+                'result': {'error': str(e)},
+                's3_location': None,
+                'timestamp': datetime.now().isoformat()
+            } for i, scenario in enumerate(batch_scenarios)]
 
     def run_experiments(self, scenarios: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Run experiments with improved concurrency control"""
+        """Run experiments with improved concurrency control and optional batch processing"""
         total_scenarios = len(scenarios)
         
-        print(f"🚀 CLOUD EXECUTION: {total_scenarios} scenarios, {self.parallel_workers} parallel workers")
+        # Determine processing mode
+        if self.use_batch_processing:
+            print(f"🚀 CLOUD EXECUTION: {total_scenarios} scenarios, {self.parallel_workers} parallel workers, BATCH mode (size={self.batch_size})")
+        else:
+            print(f"🚀 CLOUD EXECUTION: {total_scenarios} scenarios, {self.parallel_workers} parallel workers, SINGLE mode")
         
         # Adaptive worker count based on scenario complexity and Monte Carlo simulations
         complex_scenarios = any('methods' in s and len(s.get('methods', [])) >= 3 for s in scenarios)
@@ -273,6 +464,155 @@ class ExperimentRunner:
             print(f"🔧 Complex scenarios detected ({', '.join(complexity_reason)}), reducing workers to {adaptive_workers}")
         else:
             adaptive_workers = self.parallel_workers
+        
+        # Use batch processing if enabled
+        if self.use_batch_processing:
+            return self.run_experiments_batch(scenarios, adaptive_workers)
+        else:
+            return self.run_experiments_single(scenarios, adaptive_workers)
+    
+    def run_experiments_batch(self, scenarios: List[Dict[str, Any]], adaptive_workers: int) -> List[Dict[str, Any]]:
+        """Run experiments using batch processing for improved performance"""
+        total_scenarios = len(scenarios)
+        
+        # Split scenarios into batches
+        batches = []
+        for i in range(0, len(scenarios), self.batch_size):
+            batch = scenarios[i:i + self.batch_size]
+            batches.append(batch)
+        
+        print(f"📦 Created {len(batches)} batches of up to {self.batch_size} scenarios each")
+        
+        results = []
+        submitted_count = 0
+        completed_count = 0
+        
+        print(f"🎯 Starting batch submission...")
+        
+        with ThreadPoolExecutor(max_workers=adaptive_workers) as executor:
+            # Submit all batches with progress tracking
+            future_to_batch = {}
+            for batch_idx, batch in enumerate(batches):
+                # Check for shutdown during submission
+                if shutdown_requested:
+                    print(f"🛑 Shutdown requested during submission, stopping at batch {batch_idx}/{len(batches)}")
+                    break
+                    
+                try:
+                    batch_id = f"batch_{batch_idx:03d}"
+                    future = executor.submit(self.process_batch, batch, batch_id)
+                    future_to_batch[future] = (batch_idx, batch)
+                    submitted_count += len(batch)
+                    if (batch_idx + 1) % 5 == 0 or batch_idx == len(batches) - 1:
+                        print(f"   📤 Submitted {batch_idx + 1}/{len(batches)} batches ({submitted_count} scenarios)")
+                except Exception as e:
+                    print(f"   ❌ Failed to submit batch {batch_idx}: {e}")
+            
+            print(f"✅ Submitted {len(future_to_batch)} batches to {adaptive_workers} workers")
+            print(f"⏳ Waiting for batch completions...")
+            
+            # Early exit if all submission was cancelled
+            if len(future_to_batch) == 0:
+                print("🛑 No batches submitted, exiting...")
+                return []
+            
+            # Process completed batches with timeout and progress tracking
+            start_time = time.time()
+            last_progress_time = start_time
+            
+            # Monitor execution with timeout and shutdown handling
+            execution_timeout = 7200  # 2 hours max execution
+            
+            try:
+                for future in as_completed(future_to_batch, timeout=execution_timeout):
+                    # Check for shutdown request first
+                    if shutdown_requested:
+                        print(f"🛑 Shutdown requested, cancelling remaining batches...")
+                        # Cancel all remaining futures
+                        cancelled_count = 0
+                        for remaining_future in future_to_batch:
+                            if not remaining_future.done():
+                                if remaining_future.cancel():
+                                    cancelled_count += 1
+                        print(f"   ✅ Cancelled {cancelled_count} pending batches")
+                        break
+                    
+                    try:
+                        batch_results = future.result(timeout=120)  # 2 minutes timeout per batch result
+                        results.extend(batch_results)
+                        completed_count += len(batch_results)
+                        
+                        # Progress reporting
+                        current_time = time.time()
+                        if current_time - last_progress_time >= 30 or completed_count >= total_scenarios:  # Every 30s or final
+                            elapsed = current_time - start_time
+                            rate = completed_count / elapsed if elapsed > 0 else 0
+                            remaining = total_scenarios - completed_count
+                            eta = remaining / rate if rate > 0 else "unknown"
+                            eta_str = f"{eta:.0f}s" if isinstance(eta, (int, float)) else eta
+                            
+                            print(f"⚡ Progress: {completed_count}/{total_scenarios} ({100*completed_count/total_scenarios:.1f}%) | Rate: {rate:.2f}/s | ETA: {eta_str}")
+                            
+                            # Debug info for hanging batches
+                            pending_count = len(future_to_batch) - len([f for f in future_to_batch if f.done()])
+                            if pending_count > 0:
+                                print(f"   📊 Active: {pending_count} batches still running")
+                            
+                            last_progress_time = current_time
+                            
+                    except TimeoutError:
+                        print(f"⏰ Timeout waiting for batch result (120s)")
+                        batch_idx, batch = future_to_batch.get(future, (-1, []))
+                        print(f"   ⚠️ Timed out batch: batch_{batch_idx:03d}")
+                        
+                        # Add timeout results for all scenarios in the batch
+                        for i, scenario in enumerate(batch):
+                            results.append({
+                                'scenario_id': scenario.get('scenario_id', f'batch_{batch_idx}_scenario_{i}'),
+                                'success': False,
+                                'result': {'error': 'Batch processing timeout (120s)'},
+                                's3_location': None,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                        completed_count += len(batch)
+                        
+                    except Exception as e:
+                        print(f"❌ Error processing batch result: {e}")
+                        batch_idx, batch = future_to_batch.get(future, (-1, []))
+                        
+                        # Add error results for all scenarios in the batch
+                        for i, scenario in enumerate(batch):
+                            results.append({
+                                'scenario_id': scenario.get('scenario_id', f'batch_{batch_idx}_scenario_{i}'),
+                                'success': False,
+                                'result': {'error': str(e)},
+                                's3_location': None,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                        completed_count += len(batch)
+                        
+            except TimeoutError:
+                print(f"🚨 EXECUTION TIMEOUT: Maximum execution time ({execution_timeout}s) exceeded!")
+                print(f"   📊 Completed: {completed_count}/{total_scenarios} scenarios")
+                
+                # Mark remaining scenarios as failed
+                for future, (batch_idx, batch) in future_to_batch.items():
+                    if not future.done():
+                        for i, scenario in enumerate(batch):
+                            results.append({
+                                'scenario_id': scenario.get('scenario_id', f'batch_{batch_idx}_scenario_{i}'),
+                                'success': False,
+                                'result': {'error': f'Execution timeout ({execution_timeout}s)'},
+                                's3_location': None,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                        completed_count += len(batch)
+        
+        return results
+    
+    def run_experiments_single(self, scenarios: List[Dict[str, Any]], adaptive_workers: int) -> List[Dict[str, Any]]:
+        """Run experiments using single scenario processing (original method)"""
+        total_scenarios = len(scenarios)
         
         results = []
         submitted_count = 0
@@ -845,7 +1185,9 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     day_group.add_argument('--day', type=int, help='Single day (1-31)')
     day_group.add_argument('--days', help='Multiple days (comma-separated): 1,6,10')
     day_group.add_argument('--start_day', type=int, help='Start day for range (use with --end_day)')
+    day_group.add_argument('--days_modulo', help='Days by modulo (DIVISOR,REMAINDER): 5,1 = days 1,6,11,16,21,26,31')
     parser.add_argument('--end_day', type=int, help='End day for range (use with --start_day)')
+    parser.add_argument('--total_days', type=int, default=31, help='Total days in month for modulo calculation (default: 31)')
     
     # HIKIMA TIME WINDOW PARAMETERS
     hikima_group = parser.add_argument_group('Hikima Time Window Configuration')
@@ -868,6 +1210,8 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     
     # Execution options
     parser.add_argument('--parallel', type=int, default=3, help='Parallel workers (default: 3)')
+    parser.add_argument('--batch_size', type=int, default=5, help='Batch size for Lambda processing (1-10, default: 5)')
+    parser.add_argument('--no_batch', action='store_true', help='Disable batch processing (use single scenario mode)')
     parser.add_argument('--production', action='store_true', help='Production mode (minimal logging)')
     parser.add_argument('--debug', action='store_true', help='Debug mode (verbose output)')
     parser.add_argument('--dry_run', action='store_true', help='Dry run (show what would be executed)')
@@ -881,8 +1225,26 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
         args.days = [int(d.strip()) for d in args.days.split(',')]
     elif args.start_day and args.end_day:
         args.days = list(range(args.start_day, args.end_day + 1))
+    elif args.days_modulo:
+        try:
+            divisor, remainder = map(int, args.days_modulo.split(','))
+            if remainder >= divisor:
+                parser.error(f"Remainder ({remainder}) must be less than divisor ({divisor})")
+            
+            args.days = []
+            for day in range(1, args.total_days + 1):
+                if day % divisor == remainder:
+                    args.days.append(day)
+            
+            if not args.days:
+                parser.error(f"No days found for modulo {divisor} with remainder {remainder}")
+                
+            print(f"🎯 Modulo selection: divisor={divisor}, remainder={remainder}")
+            print(f"📅 Selected days: {args.days}")
+        except ValueError:
+            parser.error("Invalid days_modulo format. Use: DIVISOR,REMAINDER (e.g., 5,1)")
     else:
-        parser.error("Must specify --day, --days, or --start_day/--end_day")
+        parser.error("Must specify --day, --days, --start_day/--end_day, or --days_modulo")
     
     # Process eval and methods
     args.eval = [e.strip() for e in args.eval.split(',')]
@@ -893,6 +1255,14 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     for method in args.methods:
         if method not in valid_methods:
             parser.error(f"Invalid method: {method}. Valid: {valid_methods}")
+    
+    # Validate and process batch size
+    if args.no_batch:
+        batch_size = 1  # Disable batch processing
+    else:
+        batch_size = max(1, min(args.batch_size, 10))  # Clamp to 1-10
+        if batch_size != args.batch_size:
+            print(f"🔧 Adjusted batch size from {args.batch_size} to {batch_size} (valid range: 1-10)")
     
     # Adaptive parallel workers based on complexity
     if len(args.methods) >= 3:
@@ -919,6 +1289,7 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     print(f"   📊 Evaluation: {args.eval}")
     print(f"   🔧 Methods: {args.methods}")
     print(f"   ⚡ Parallel Workers: {args.parallel}")
+    print(f"   📦 Batch Processing: {'Enabled' if batch_size > 1 else 'Disabled'} (size={batch_size})")
     print(f"   🎛️ Production Mode: {args.production}")
     print(f"   🎲 Monte Carlo Simulations: {args.num_eval} ({'Hikima standard' if args.num_eval == 1000 else 'custom'})")
     
@@ -1016,7 +1387,8 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     # Run experiments with improved runner
     runner = ExperimentRunner(
         parallel_workers=args.parallel,
-        production_mode=args.production
+        production_mode=args.production,
+        batch_size=batch_size
     )
     
     results = runner.run_experiments(scenarios)

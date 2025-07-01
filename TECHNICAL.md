@@ -147,7 +147,7 @@ python run_pricing_experiment.py \
 # 📊 Hikima Configuration: 10:00-20:00, 5min intervals = 120 scenarios/day
 # ✅ Success: 120 (100.0%) ⚡ Rate: 2.0 scenarios/second
 ```
-
+gut
 #### **Full Algorithm Comparison**
 ```bash
 # Run all 4 methods with both evaluation functions

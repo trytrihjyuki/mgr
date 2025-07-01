@@ -1623,6 +1623,7 @@ class PricingExperimentRunner:
 def lambda_handler(event, context):
     """
     AWS Lambda handler function for ride-hailing pricing experiments.
+    Supports both single scenario and batch processing for improved performance.
     """
     logger.info(f"📥 Lambda invoked: {json.dumps(event, default=str)}")
     
@@ -1651,6 +1652,90 @@ def lambda_handler(event, context):
             }, default=str)
         }
     
+    # Check if this is a batch request
+    if 'batch_scenarios' in event:
+        logger.info(f"🚀 Batch processing mode: {len(event['batch_scenarios'])} scenarios")
+        return handle_batch_scenarios(event, context)
+    else:
+        logger.info("📋 Single scenario processing mode")
+        return handle_single_scenario(event, context)
+
+
+def handle_batch_scenarios(event, context):
+    """Handle multiple scenarios in a single Lambda invocation for improved performance."""
+    try:
+        start_time = time.time()
+        batch_scenarios = event['batch_scenarios']
+        num_scenarios = len(batch_scenarios)
+        
+        logger.info(f"🔄 Processing batch of {num_scenarios} scenarios")
+        
+        # Get global parameters from event
+        num_eval = event.get('num_eval', 1000)
+        logger.info(f"🎲 Monte Carlo simulations: {num_eval} ({'Hikima standard' if num_eval == 1000 else 'custom'})")
+        
+        runner = PricingExperimentRunner(num_eval=num_eval)
+        
+        batch_results = []
+        
+        for i, scenario_event in enumerate(batch_scenarios):
+            logger.info(f"📋 Processing scenario {i+1}/{num_scenarios}: {scenario_event.get('scenario_id', f'batch_{i}')}")
+            
+            # Check remaining time before processing each scenario
+            remaining_time = context.get_remaining_time_in_millis() if context else 900000
+            if remaining_time < 60000:  # Less than 1 minute remaining
+                logger.warning(f"⏰ Low time remaining ({remaining_time/1000:.1f}s), stopping batch processing")
+                batch_results.append({
+                    'scenario_id': scenario_event.get('scenario_id', f'batch_{i}'),
+                    'status': 'timeout',
+                    'error': f'Batch timeout: {remaining_time/1000:.1f}s remaining'
+                })
+                break
+            
+            try:
+                # Process single scenario
+                scenario_result = process_single_scenario_core(scenario_event, runner)
+                batch_results.append(scenario_result)
+                
+            except Exception as e:
+                logger.error(f"❌ Scenario {i+1} failed: {e}")
+                batch_results.append({
+                    'scenario_id': scenario_event.get('scenario_id', f'batch_{i}'),
+                    'status': 'error',
+                    'error': str(e)
+                })
+        
+        execution_time = time.time() - start_time
+        
+        # Return batch results
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'batch_mode': True,
+                'total_scenarios': num_scenarios,
+                'processed_scenarios': len(batch_results),
+                'execution_time_seconds': execution_time,
+                'results': batch_results
+            }, default=str),
+            'headers': {'Content-Type': 'application/json'}
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Batch processing error: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'batch_mode': True,
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }, default=str),
+            'headers': {'Content-Type': 'application/json'}
+        }
+
+
+def handle_single_scenario(event, context):
+    """Handle a single scenario (original behavior)."""
     try:
         start_time = time.time()
         
@@ -1679,197 +1764,17 @@ def lambda_handler(event, context):
                 'headers': {'Content-Type': 'application/json'}
             }
         
-        # Handle regular experiment
-        # Extract event parameters
-        execution_date = event.get('execution_date', datetime.now().strftime('%Y%m%d_%H%M%S'))
-        training_id = event.get('training_id', f"{random.randint(100_000_000, 999_999_999)}")
-        year = event.get('year', 2019)
-        month = event.get('month', 10)
-        day = event.get('day', 1)
-        time_window = event.get('time_window', {})
-        vehicle_type = event.get('vehicle_type', 'green')
-        acceptance_function = event.get('acceptance_function', 'PL')
-        methods = event.get('methods', ['MinMaxCostFlow'])
-        
-        logger.info(f"🧪 Starting pricing experiment: {methods} methods")
-        logger.info(f"📅 Date: {year}-{month:02d}-{day:02d}")
-        logger.info(f"🕐 Time window: {time_window}")
-        logger.info(f"🎯 Acceptance function: {acceptance_function}")
-        
-        # Parse time window parameters (following Hikima methodology)
-        hour_start = time_window.get('hour_start', 10)  # 10:00 AM
-        hour_end = time_window.get('hour_end', 20)       # 8:00 PM
-        minute_start = time_window.get('minute_start', 0)
-        time_interval = time_window.get('time_interval', 5)  # 5 minutes (Hikima standard)
-        scenario_index = event.get('scenario_index', 0)
-        borough = event.get('borough', 'Manhattan')
-        
-        # Hikima runs 120 scenarios total (every 5 minutes from 10:00 to 20:00)
-        # 10 hours × 12 scenarios per hour = 120 scenarios
-        total_scenarios = ((hour_end - hour_start) * 60) // time_interval
-        
-        logger.info(f"📋 Hikima setup: Running scenario {scenario_index}/{total_scenarios-1} (120 total expected)")
-        
-        # Calculate specific time window for this scenario (Hikima methodology)
-        scenario_minute = scenario_index * time_interval
-        current_hour = hour_start + (scenario_minute // 60)
-        current_minute = minute_start + (scenario_minute % 60)
-        
-        # Validate scenario index
-        if scenario_index >= total_scenarios:
-            logger.warning(f"⚠️ Scenario index {scenario_index} exceeds total scenarios {total_scenarios}")
-            # Handle out-of-range scenarios gracefully
-            scenario_index = scenario_index % total_scenarios
-            scenario_minute = scenario_index * time_interval
-            current_hour = hour_start + (scenario_minute // 60)
-            current_minute = minute_start + (scenario_minute % 60)
-        
-        # Adjust if minute overflows (shouldn't happen with 5-minute intervals)
-        if current_minute >= 60:
-            current_hour += current_minute // 60
-            current_minute = current_minute % 60
-        
-        time_start = datetime(year, month, day, current_hour, current_minute, 0)
-        time_end = time_start + timedelta(minutes=time_interval)
-        
-        logger.info(f"⏰ Hikima time window: {time_start.strftime('%H:%M')} - {time_end.strftime('%H:%M')} (scenario {scenario_index})")
-        
-        # Validate that we haven't exceeded the day
-        if current_hour >= 24:
-            logger.error(f"❌ Invalid time calculation: hour={current_hour} for scenario {scenario_index}")
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': f'Invalid scenario index {scenario_index}. Max scenarios per day: {total_scenarios}'
-                }, default=str)
-            }
-        
-        # Load real data from S3
-        requesters_df, taxis_df = runner.load_taxi_data(
-            taxi_type=vehicle_type, 
-            year=year, 
-            month=month, 
-            day=day,
-            borough=borough,
-            time_start=time_start, 
-            time_end=time_end
-        )
-        
-        # Calculate distance matrix and edge weights using Hikima methodology
-        distance_matrix, edge_weights = runner.calculate_distance_matrix_and_edge_weights(requesters_df, taxis_df)
-        
-        logger.info(f"📊 Data: {len(requesters_df)} requesters, {len(taxis_df)} taxis")
-        
-        # Run pricing methods
-        results = []
-        for method in methods:
-            logger.info(f"🔧 Running method: {method}")
-            
-            try:
-                if method == 'MinMaxCostFlow':
-                    result = runner.run_minmaxcostflow(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function)
-                elif method == 'MAPS':
-                    result = runner.run_maps(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function)
-                elif method == 'LinUCB':
-                    result = runner.run_linucb(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function, borough, vehicle_type, current_hour)
-                elif method == 'LP':
-                    result = runner.run_lp(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function)
-                else:
-                    logger.warning(f"⚠️ Unknown method: {method}")
-                    continue
-                
-                results.append(result)
-                logger.info(f"✅ {method}: Objective={result['objective_value']:.2f}")
-                
-            except Exception as e:
-                logger.error(f"❌ {method} failed: {e}")
-                results.append({
-                    'method_name': method,
-                    'objective_value': 0.0,
-                    'computation_time': 0.0,
-                    'error': str(e)
-                })
-        
-        # Calculate comprehensive statistics
-        total_objective = sum(r.get('objective_value', 0) for r in results)
-        total_computation_time = sum(r.get('computation_time', 0) for r in results)
-        avg_computation_time = total_computation_time / len(results) if results else 0
-        
-        # Data statistics
-        data_stats = {
-            'num_requesters': len(requesters_df),
-            'num_taxis': len(taxis_df),
-            'ratio_requests_to_taxis': len(requesters_df) / max(1, len(taxis_df)),
-            'avg_trip_distance_km': float(requesters_df['trip_distance_km'].mean()) if len(requesters_df) > 0 else 0,
-            'avg_trip_amount': float(requesters_df['total_amount'].mean()) if len(requesters_df) > 0 else 0,
-            'avg_trip_duration_seconds': float(requesters_df['trip_duration_seconds'].mean()) if len(requesters_df) > 0 else 0
-        }
-        
-        # Method performance summary
-        method_summary = {}
-        for result in results:
-            method_name = result.get('method_name', 'Unknown')
-            method_summary[method_name] = {
-                'objective_value': result.get('objective_value', 0),
-                'computation_time': result.get('computation_time', 0),
-                'success': 'error' not in result
-            }
-        
-        # Save results to S3 only if not disabled
-        s3_location = ""
-        if not event.get('skip_s3_save', False):
-            s3_location = runner.save_results_to_s3(results, event, data_stats, {
-                'total_objective_value': total_objective,
-                'total_computation_time': total_computation_time,
-                'avg_computation_time': avg_computation_time,
-                'methods': method_summary
-            })
-        
-        # Prepare final response
-        execution_time = time.time() - start_time
-        response_data = {
-            'training_id': training_id,
-            'execution_date': execution_date,
-            'timestamp': datetime.now().isoformat(),
-            'status': 'success',
-            'execution_time_seconds': execution_time,
-            'results': results,
-            's3_location': s3_location,
-            'experiment_metadata': {
-                'year': year,
-                'month': month,
-                'day': day,
-                'borough': borough,
-                'time_window': {
-                    'start': time_start.isoformat(),
-                    'end': time_end.isoformat(),
-                    'duration_minutes': time_interval,
-                    'scenario_index': scenario_index
-                },
-                'vehicle_type': vehicle_type,
-                'acceptance_function': acceptance_function,
-                'methods': methods
-            },
-            'data_statistics': data_stats,
-            'performance_summary': {
-                'total_objective_value': total_objective,
-                'total_computation_time': total_computation_time,
-                'avg_computation_time': avg_computation_time,
-                'methods': method_summary
-            }
-        }
-        
-        logger.info(f"✅ Experiment completed in {execution_time:.2f}s")
-        logger.info(f"📊 Results: {len(results)} methods, saved to {s3_location}")
+        # Process single scenario
+        scenario_result = process_single_scenario_core(event, runner)
         
         return {
             'statusCode': 200,
-            'body': json.dumps(response_data, default=str),
+            'body': json.dumps(scenario_result, default=str),
             'headers': {'Content-Type': 'application/json'}
         }
         
     except Exception as e:
-        logger.error(f"❌ Lambda handler error: {e}")
+        logger.error(f"❌ Single scenario processing error: {e}")
         logger.error(traceback.format_exc())
         return {
             'statusCode': 500,
@@ -1878,4 +1783,194 @@ def lambda_handler(event, context):
                 'traceback': traceback.format_exc()
             }, default=str),
             'headers': {'Content-Type': 'application/json'}
-        } 
+        }
+
+
+def process_single_scenario_core(event, runner):
+    """Core scenario processing logic (shared between single and batch modes)."""
+    
+    start_time = time.time()
+    
+    # Extract event parameters
+    execution_date = event.get('execution_date', datetime.now().strftime('%Y%m%d_%H%M%S'))
+    training_id = event.get('training_id', f"{random.randint(100_000_000, 999_999_999)}")
+    year = event.get('year', 2019)
+    month = event.get('month', 10)
+    day = event.get('day', 1)
+    time_window = event.get('time_window', {})
+    vehicle_type = event.get('vehicle_type', 'green')
+    acceptance_function = event.get('acceptance_function', 'PL')
+    methods = event.get('methods', ['MinMaxCostFlow'])
+    
+    logger.info(f"🧪 Starting pricing experiment: {methods} methods")
+    logger.info(f"📅 Date: {year}-{month:02d}-{day:02d}")
+    logger.info(f"🕐 Time window: {time_window}")
+    logger.info(f"🎯 Acceptance function: {acceptance_function}")
+    
+    # Parse time window parameters (following Hikima methodology)
+    hour_start = time_window.get('hour_start', 10)  # 10:00 AM
+    hour_end = time_window.get('hour_end', 20)       # 8:00 PM
+    minute_start = time_window.get('minute_start', 0)
+    time_interval = time_window.get('time_interval', 5)  # 5 minutes (Hikima standard)
+    scenario_index = event.get('scenario_index', 0)
+    borough = event.get('borough', 'Manhattan')
+    
+    # Hikima runs 120 scenarios total (every 5 minutes from 10:00 to 20:00)
+    # 10 hours × 12 scenarios per hour = 120 scenarios
+    total_scenarios = ((hour_end - hour_start) * 60) // time_interval
+    
+    logger.info(f"📋 Hikima setup: Running scenario {scenario_index}/{total_scenarios-1} (120 total expected)")
+    
+    # Calculate specific time window for this scenario (Hikima methodology)
+    scenario_minute = scenario_index * time_interval
+    current_hour = hour_start + (scenario_minute // 60)
+    current_minute = minute_start + (scenario_minute % 60)
+    
+    # Validate scenario index
+    if scenario_index >= total_scenarios:
+        logger.warning(f"⚠️ Scenario index {scenario_index} exceeds total scenarios {total_scenarios}")
+        # Handle out-of-range scenarios gracefully
+        scenario_index = scenario_index % total_scenarios
+        scenario_minute = scenario_index * time_interval
+        current_hour = hour_start + (scenario_minute // 60)
+        current_minute = minute_start + (scenario_minute % 60)
+    
+    # Adjust if minute overflows (shouldn't happen with 5-minute intervals)
+    if current_minute >= 60:
+        current_hour += current_minute // 60
+        current_minute = current_minute % 60
+    
+    time_start = datetime(year, month, day, current_hour, current_minute, 0)
+    time_end = time_start + timedelta(minutes=time_interval)
+    
+    logger.info(f"⏰ Hikima time window: {time_start.strftime('%H:%M')} - {time_end.strftime('%H:%M')} (scenario {scenario_index})")
+    
+    # Validate that we haven't exceeded the day
+    if current_hour >= 24:
+        logger.error(f"❌ Invalid time calculation: hour={current_hour} for scenario {scenario_index}")
+        return {
+            'scenario_id': event.get('scenario_id', f'scenario_{scenario_index}'),
+            'status': 'error',
+            'error': f'Invalid scenario index {scenario_index}. Max scenarios per day: {total_scenarios}'
+        }
+    
+    # Load real data from S3
+    requesters_df, taxis_df = runner.load_taxi_data(
+        taxi_type=vehicle_type, 
+        year=year, 
+        month=month, 
+        day=day,
+        borough=borough,
+        time_start=time_start, 
+        time_end=time_end
+    )
+    
+    # Calculate distance matrix and edge weights using Hikima methodology
+    distance_matrix, edge_weights = runner.calculate_distance_matrix_and_edge_weights(requesters_df, taxis_df)
+    
+    logger.info(f"📊 Data: {len(requesters_df)} requesters, {len(taxis_df)} taxis")
+    
+    # Run pricing methods
+    results = []
+    for method in methods:
+        logger.info(f"🔧 Running method: {method}")
+        
+        try:
+            if method == 'MinMaxCostFlow':
+                result = runner.run_minmaxcostflow(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function)
+            elif method == 'MAPS':
+                result = runner.run_maps(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function)
+            elif method == 'LinUCB':
+                result = runner.run_linucb(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function, borough, vehicle_type, current_hour)
+            elif method == 'LP':
+                result = runner.run_lp(requesters_df, taxis_df, distance_matrix, edge_weights, acceptance_function)
+            else:
+                logger.warning(f"⚠️ Unknown method: {method}")
+                continue
+            
+            results.append(result)
+            logger.info(f"✅ {method}: Objective={result['objective_value']:.2f}")
+            
+        except Exception as e:
+            logger.error(f"❌ {method} failed: {e}")
+            results.append({
+                'method_name': method,
+                'objective_value': 0.0,
+                'computation_time': 0.0,
+                'error': str(e)
+            })
+    
+    # Calculate comprehensive statistics
+    total_objective = sum(r.get('objective_value', 0) for r in results)
+    total_computation_time = sum(r.get('computation_time', 0) for r in results)
+    avg_computation_time = total_computation_time / len(results) if results else 0
+    
+    # Data statistics
+    data_stats = {
+        'num_requesters': len(requesters_df),
+        'num_taxis': len(taxis_df),
+        'ratio_requests_to_taxis': len(requesters_df) / max(1, len(taxis_df)),
+        'avg_trip_distance_km': float(requesters_df['trip_distance_km'].mean()) if len(requesters_df) > 0 else 0,
+        'avg_trip_amount': float(requesters_df['total_amount'].mean()) if len(requesters_df) > 0 else 0,
+        'avg_trip_duration_seconds': float(requesters_df['trip_duration_seconds'].mean()) if len(requesters_df) > 0 else 0
+    }
+    
+    # Method performance summary
+    method_summary = {}
+    for result in results:
+        method_name = result.get('method_name', 'Unknown')
+        method_summary[method_name] = {
+            'objective_value': result.get('objective_value', 0),
+            'computation_time': result.get('computation_time', 0),
+            'success': 'error' not in result
+        }
+    
+    # Save results to S3 only if not disabled
+    s3_location = ""
+    if not event.get('skip_s3_save', False):
+        s3_location = runner.save_results_to_s3(results, event, data_stats, {
+            'total_objective_value': total_objective,
+            'total_computation_time': total_computation_time,
+            'avg_computation_time': avg_computation_time,
+            'methods': method_summary
+        })
+    
+    # Prepare final response
+    execution_time = time.time() - start_time
+    response_data = {
+        'scenario_id': event.get('scenario_id', f'scenario_{scenario_index}'),
+        'training_id': training_id,
+        'execution_date': execution_date,
+        'timestamp': datetime.now().isoformat(),
+        'status': 'success',
+        'execution_time_seconds': execution_time,
+        'results': results,
+        's3_location': s3_location,
+        'experiment_metadata': {
+            'year': year,
+            'month': month,
+            'day': day,
+            'borough': borough,
+            'time_window': {
+                'start': time_start.isoformat(),
+                'end': time_end.isoformat(),
+                'duration_minutes': time_interval,
+                'scenario_index': scenario_index
+            },
+            'vehicle_type': vehicle_type,
+            'acceptance_function': acceptance_function,
+            'methods': methods
+        },
+        'data_statistics': data_stats,
+        'performance_summary': {
+            'total_objective_value': total_objective,
+            'total_computation_time': total_computation_time,
+            'avg_computation_time': avg_computation_time,
+            'methods': method_summary
+        }
+    }
+    
+    logger.info(f"✅ Experiment completed in {execution_time:.2f}s")
+    logger.info(f"📊 Results: {len(results)} methods, saved to {s3_location}")
+    
+    return response_data 
