@@ -5,6 +5,67 @@
 
 set -e
 
+# Function to wait for Lambda function to be ready
+wait_for_lambda_ready() {
+    local function_name=$1
+    local region=$2
+    local max_attempts=30
+    local attempt=1
+    
+    echo "⏳ Waiting for Lambda function to be ready..."
+    
+    while [ $attempt -le $max_attempts ]; do
+        local state=$(aws lambda get-function --function-name "$function_name" --region "$region" --query 'Configuration.State' --output text 2>/dev/null || echo "NotFound")
+        local last_update_status=$(aws lambda get-function --function-name "$function_name" --region "$region" --query 'Configuration.LastUpdateStatus' --output text 2>/dev/null || echo "NotFound")
+        
+        echo "   Attempt $attempt/$max_attempts: State=$state, LastUpdateStatus=$last_update_status"
+        
+        if [[ "$state" == "Active" && "$last_update_status" == "Successful" ]]; then
+            echo "✅ Lambda function is ready"
+            return 0
+        elif [[ "$state" == "Failed" ]]; then
+            echo "❌ Lambda function is in failed state"
+            return 1
+        fi
+        
+        echo "   Waiting 10 seconds before next check..."
+        sleep 10
+        attempt=$((attempt + 1))
+    done
+    
+    echo "❌ Timeout waiting for Lambda function to be ready"
+    return 1
+}
+
+# Function to retry AWS command with exponential backoff
+retry_aws_command() {
+    local max_attempts=5
+    local attempt=1
+    local delay=2
+    
+    while [ $attempt -le $max_attempts ]; do
+        echo "   Attempt $attempt/$max_attempts..."
+        
+        if "$@"; then
+            echo "✅ Command succeeded"
+            return 0
+        else
+            local exit_code=$?
+            echo "⚠️ Command failed with exit code $exit_code"
+            
+            if [ $attempt -eq $max_attempts ]; then
+                echo "❌ Max attempts reached, command failed permanently"
+                return $exit_code
+            fi
+            
+            echo "   Waiting ${delay} seconds before retry..."
+            sleep $delay
+            delay=$((delay * 2))  # Exponential backoff
+            attempt=$((attempt + 1))
+        fi
+    done
+}
+
 # Function to clean up existing deployment
 cleanup_deployment() {
     echo "🧹 Cleaning up existing deployment..."
@@ -131,33 +192,48 @@ aws ecr describe-images --repository-name ${ECR_REPO_NAME} --region ${REGION} --
 echo "⚡ Creating/updating Lambda function..."
 if aws lambda get-function --function-name ${FUNCTION_NAME} --region ${REGION} >/dev/null 2>&1; then
     echo "🔄 Updating existing function..."
-    aws lambda update-function-code \
+    
+    # Step 1: Update function code with retry logic
+    echo "📝 Step 1/4: Updating function code..."
+    retry_aws_command aws lambda update-function-code \
         --function-name ${FUNCTION_NAME} \
         --image-uri ${ECR_REPO}:latest \
         --region ${REGION}
     
-    # Update configuration with optimized settings for Hikima environment
-    aws lambda update-function-configuration \
+    # Wait for function to be ready before next update
+    wait_for_lambda_ready ${FUNCTION_NAME} ${REGION}
+    
+    # Step 2: Update configuration with optimized settings for Hikima environment
+    echo "📝 Step 2/4: Updating function configuration..."
+    retry_aws_command aws lambda update-function-configuration \
         --function-name ${FUNCTION_NAME} \
         --timeout 900 \
         --memory-size 10240 \
         --ephemeral-storage Size=2048 \
         --region ${REGION}
     
-    # Update environment variables separately
-    aws lambda update-function-configuration \
+    # Wait for function to be ready before next update
+    wait_for_lambda_ready ${FUNCTION_NAME} ${REGION}
+    
+    # Step 3: Update environment variables separately
+    echo "📝 Step 3/4: Updating environment variables..."
+    retry_aws_command aws lambda update-function-configuration \
         --function-name ${FUNCTION_NAME} \
         --environment Variables="{PYTHONPATH=/var/task,S3_BUCKET=magisterka,OMP_NUM_THREADS=2,OPENBLAS_NUM_THREADS=2,MKL_NUM_THREADS=2}" \
         --region ${REGION}
     
-    # Set reserved concurrency separately
-    aws lambda put-reserved-concurrency-configuration \
+    # Wait for function to be ready before next update
+    wait_for_lambda_ready ${FUNCTION_NAME} ${REGION}
+    
+    # Step 4: Set reserved concurrency separately
+    echo "📝 Step 4/4: Setting reserved concurrency..."
+    retry_aws_command aws lambda put-function-concurrency \
         --function-name ${FUNCTION_NAME} \
         --reserved-concurrent-executions 5 \
         --region ${REGION}
 else
     echo "🆕 Creating new function..."
-    aws lambda create-function \
+    retry_aws_command aws lambda create-function \
         --function-name ${FUNCTION_NAME} \
         --package-type Image \
         --code ImageUri=${ECR_REPO}:latest \
@@ -168,16 +244,15 @@ else
         --environment Variables="{PYTHONPATH=/var/task,S3_BUCKET=magisterka,OMP_NUM_THREADS=2,OPENBLAS_NUM_THREADS=2,MKL_NUM_THREADS=2}" \
         --region ${REGION}
     
+    # Wait for function to be ready before setting concurrency
+    wait_for_lambda_ready ${FUNCTION_NAME} ${REGION}
+    
     # Set reserved concurrency after creation
-    aws lambda put-reserved-concurrency-configuration \
+    echo "📝 Setting reserved concurrency for new function..."
+    retry_aws_command aws lambda put-function-concurrency \
         --function-name ${FUNCTION_NAME} \
         --reserved-concurrent-executions 5 \
         --region ${REGION}
-fi
-
-if [ $? -ne 0 ]; then
-    echo "❌ Lambda function update failed"
-    exit 1
 fi
 
 echo "✅ Deployment completed!"
@@ -185,9 +260,17 @@ echo "🔗 Function ARN: arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${FUNCT
 echo "🧪 Testing function..."
 
 # Test the function with Hikima environment parameters
+# Use base64 encoding to avoid all encoding issues
+TEST_JSON='{"test_mode":true}'
+echo "📋 Using test payload: $TEST_JSON"
+
+# Encode to base64 to avoid UTF-8 and compression issues
+TEST_PAYLOAD_B64=$(echo -n "$TEST_JSON" | base64)
+echo "📋 Base64 encoded payload: $TEST_PAYLOAD_B64"
+
 aws lambda invoke \
     --function-name ${FUNCTION_NAME} \
-    --payload '{"test_mode":true,"year":2019,"month":10,"day":1,"time_window":{"start_hour":10,"start_minute":0,"end_hour":10,"end_minute":5,"window_minutes":5},"vehicle_type":"green","acceptance_function":"PL","methods":["MinMaxCostFlow"],"training_id":"123456789"}' \
+    --payload "$TEST_PAYLOAD_B64" \
     --region ${REGION} \
     response.json
 
@@ -223,23 +306,20 @@ echo "python run_experiment.py --year=2019 --month=10 --days=1 --hours=10,20 --w
 echo "🎉 Lambda function deployment completed successfully!"
 echo "📋 Usage examples:"
 echo ""
-echo "  # Test imports:"
-echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{\"test_mode\": true}' test_output.json"
+echo "  # Test imports (base64 encoded for reliability):"
+echo "  PAYLOAD=\$(echo -n '{\"test_mode\":true}' | base64)"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload \"\$PAYLOAD\" test_output.json"
 echo ""
-echo "  # Run experiment using CLI:"
+echo "  # Run experiment using CLI (recommended):"
 echo "  python ../../run_experiment.py --year=2019 --month=10 --days=1 --func=PL --methods=LP,MAPS,LinUCB"
 echo ""
-echo "  # Direct Lambda invocation:"
-echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload '{"
-echo "    \"training_id\": \"123456789\","
-echo "    \"year\": 2019,"
-echo "    \"month\": 10,"
-echo "    \"day\": 1,"
-echo "    \"vehicle_type\": \"green\","
-echo "    \"borough\": \"Manhattan\","
-echo "    \"acceptance_function\": \"PL\","
-echo "    \"methods\": [\"MinMaxCostFlow\", \"MAPS\", \"LinUCB\", \"LP\"]"
-echo "  }' experiment_output.json"
+echo "  # Direct Lambda invocation with base64 encoding:"
+echo "  JSON_PAYLOAD='{\"training_id\":\"123456789\",\"year\":2019,\"month\":10,\"day\":1,\"vehicle_type\":\"green\",\"acceptance_function\":\"PL\",\"methods\":[\"MinMaxCostFlow\"]}'"
+echo "  PAYLOAD_B64=\$(echo -n \"\$JSON_PAYLOAD\" | base64)"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload \"\$PAYLOAD_B64\" experiment_output.json"
+echo ""
+echo "  # Quick one-liner for simple tests:"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME --payload \$(echo -n '{\"test_mode\":true}' | base64) test_output.json"
 echo ""
 echo "🔧 Troubleshooting:"
 echo "  # Clean up and redeploy if issues occur:"
