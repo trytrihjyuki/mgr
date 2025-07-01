@@ -33,8 +33,9 @@ import json
 import time
 import logging
 import argparse
+import signal
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import threading
 from typing import List, Dict, Any, Tuple
 import random
@@ -49,10 +50,31 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C gracefully"""
+    global shutdown_requested
+    print(f"\n🛑 Shutdown requested (signal {signum}). Waiting for current scenarios to complete...")
+    print("   Press Ctrl+C again to force exit.")
+    shutdown_requested = True
+
+# Register signal handler
+signal.signal(signal.SIGINT, signal_handler)
+
 class ExperimentRunner:
     def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True):
         """Initialize the unified experiment runner with Hikima-consistent defaults"""
-        self.lambda_client = boto3.client('lambda', region_name=region)
+        # Configure clients with proper timeouts
+        import botocore.config
+        config = botocore.config.Config(
+            read_timeout=850,  # 14+ minutes (close to Lambda timeout)
+            connect_timeout=60,
+            retries={'max_attempts': 0}  # We handle retries ourselves
+        )
+        
+        self.lambda_client = boto3.client('lambda', region_name=region, config=config)
         self.s3_client = boto3.client('s3', region_name=region)
         self.parallel_workers = min(parallel_workers, 5)  # Cap at 5 to avoid rate limits
         self.production_mode = production_mode
@@ -61,9 +83,9 @@ class ExperimentRunner:
         self.error_count = 0
         self.start_time = time.time()
         
-        # Improved timeout and retry settings
+        # Improved timeout and retry settings  
         self.lambda_timeout = 900  # 15 minutes (Lambda max)
-        self.client_timeout = 600  # 10 minutes (client timeout, less than Lambda)
+        self.client_timeout = 850  # 14+ minutes (close to Lambda timeout)
         self.max_retries = 3
         self.base_backoff = 2.0
         
@@ -75,7 +97,15 @@ class ExperimentRunner:
                 # Add jitter to prevent thundering herd  
                 backoff_time = (self.base_backoff ** attempt) + random.uniform(0, 2) if attempt > 0 else 0
                 if attempt > 0:
+                    if not self.production_mode:
+                        print(f"⏳ {scenario_id}: Retrying (attempt {attempt+1}) after {backoff_time:.1f}s...")
                     time.sleep(backoff_time)
+                
+                if not self.production_mode:
+                    print(f"📤 {scenario_id}: Invoking Lambda (attempt {attempt+1}/{self.max_retries})")
+                
+                # Track Lambda invocation time
+                lambda_start_time = time.time()
                 
                 # Configure client with proper timeout
                 response = self.lambda_client.invoke(
@@ -83,6 +113,11 @@ class ExperimentRunner:
                     InvocationType='RequestResponse',
                     Payload=json.dumps(payload)
                 )
+                
+                lambda_duration = time.time() - lambda_start_time
+                
+                if not self.production_mode:
+                    print(f"📥 {scenario_id}: Lambda responded in {lambda_duration:.1f}s (status: {response['StatusCode']})")
                 
                 if response['StatusCode'] == 200:
                     result = json.loads(response['Payload'].read().decode('utf-8'))
@@ -111,13 +146,13 @@ class ExperimentRunner:
                     else:
                         return False, {'error': 'Rate limit exceeded after retries', 'scenario_id': scenario_id}
                         
-                elif 'timeout' in error_str.lower():
+                elif 'timeout' in error_str.lower() or 'timed out' in error_str.lower():
                     if not self.production_mode:
-                        print(f"⏰ {scenario_id}: Timeout ({attempt+1}/{self.max_retries})")
+                        print(f"⏰ {scenario_id}: Timeout ({attempt+1}/{self.max_retries}) - Client timeout: {self.client_timeout}s")
                     if attempt < self.max_retries - 1:
                         continue
                     else:
-                        return False, {'error': 'Timeout after retries', 'scenario_id': scenario_id}
+                        return False, {'error': f'Timeout after retries (client timeout: {self.client_timeout}s)', 'scenario_id': scenario_id}
                 
                 else:
                     return False, {'error': str(e), 'scenario_id': scenario_id}
@@ -129,6 +164,9 @@ class ExperimentRunner:
         scenario_id = scenario_params['scenario_id']
         
         try:
+            if not self.production_mode:
+                print(f"🚀 Starting scenario: {scenario_id}")
+            
             success, result = self.invoke_lambda_with_retry(scenario_params, scenario_id)
             
             # Extract S3 location if available - FIXED: Lambda client returns data directly, not in 'body'
@@ -192,27 +230,122 @@ class ExperimentRunner:
         
         print(f"🚀 CLOUD EXECUTION: {total_scenarios} scenarios, {self.parallel_workers} parallel workers")
         
-        # Adaptive worker count based on scenario complexity
-        if any('methods' in s and len(s.get('methods', [])) >= 3 for s in scenarios):
-            # Reduce workers for complex scenarios (3+ methods)
-            adaptive_workers = min(self.parallel_workers, 3)
-            print(f"🔧 Complex scenarios detected, reducing workers to {adaptive_workers}")
+        # Adaptive worker count based on scenario complexity and Monte Carlo simulations
+        complex_scenarios = any('methods' in s and len(s.get('methods', [])) >= 3 for s in scenarios)
+        high_simulation_count = any('num_eval' in s and s.get('num_eval', 1000) >= 1000 for s in scenarios)
+        
+        if complex_scenarios or high_simulation_count:
+            # Reduce workers for complex scenarios (3+ methods) or high simulation counts (1000+)
+            adaptive_workers = min(self.parallel_workers, 2)  # Even more conservative
+            complexity_reason = []
+            if complex_scenarios:
+                complexity_reason.append("3+ methods")
+            if high_simulation_count:
+                complexity_reason.append("1000+ simulations")
+            print(f"🔧 Complex scenarios detected ({', '.join(complexity_reason)}), reducing workers to {adaptive_workers}")
         else:
             adaptive_workers = self.parallel_workers
         
         results = []
+        submitted_count = 0
+        completed_count = 0
+        
+        print(f"🎯 Starting scenario submission...")
         
         with ThreadPoolExecutor(max_workers=adaptive_workers) as executor:
-            # Submit all scenarios
-            future_to_scenario = {
-                executor.submit(self.process_scenario, scenario): scenario 
-                for scenario in scenarios
-            }
+            # Submit all scenarios with progress tracking
+            future_to_scenario = {}
+            for scenario in scenarios:
+                try:
+                    future = executor.submit(self.process_scenario, scenario)
+                    future_to_scenario[future] = scenario
+                    submitted_count += 1
+                    if submitted_count % 10 == 0 or submitted_count == len(scenarios):
+                        print(f"   📤 Submitted {submitted_count}/{len(scenarios)} scenarios")
+                except Exception as e:
+                    print(f"   ❌ Failed to submit scenario {scenario.get('scenario_id', 'unknown')}: {e}")
             
-            # Process completed scenarios
-            for future in as_completed(future_to_scenario):
-                result = future.result()
-                results.append(result)
+            print(f"✅ All {submitted_count} scenarios submitted to {adaptive_workers} workers")
+            print(f"⏳ Waiting for completions...")
+            
+            # Process completed scenarios with timeout and progress tracking
+            start_time = time.time()
+            last_progress_time = start_time
+            
+            # Monitor execution with timeout and shutdown handling
+            execution_timeout = 7200  # 2 hours max execution
+            
+            try:
+                for future in as_completed(future_to_scenario, timeout=execution_timeout):
+                    # Check for shutdown request
+                    if shutdown_requested:
+                        print(f"🛑 Shutdown requested, cancelling remaining scenarios...")
+                        break
+                    
+                    try:
+                        result = future.result(timeout=60)  # Increased to 60s timeout per result
+                        results.append(result)
+                        completed_count += 1
+                        
+                        # Progress reporting
+                        current_time = time.time()
+                        if current_time - last_progress_time >= 30 or completed_count == len(scenarios):  # Every 30s or final
+                            elapsed = current_time - start_time
+                            rate = completed_count / elapsed if elapsed > 0 else 0
+                            remaining = len(scenarios) - completed_count
+                            eta = remaining / rate if rate > 0 else "unknown"
+                            eta_str = f"{eta:.0f}s" if isinstance(eta, (int, float)) else eta
+                            
+                            print(f"⚡ Progress: {completed_count}/{len(scenarios)} ({100*completed_count/len(scenarios):.1f}%) | Rate: {rate:.2f}/s | ETA: {eta_str}")
+                            
+                            # Debug info for hanging scenarios
+                            pending_count = len(future_to_scenario) - completed_count
+                            if pending_count > 0:
+                                print(f"   📊 Active: {pending_count} scenarios still running")
+                            
+                            last_progress_time = current_time
+                            
+                    except TimeoutError:
+                        print(f"⏰ Timeout waiting for scenario result (60s)")
+                        scenario = future_to_scenario.get(future, {})
+                        scenario_id = scenario.get('scenario_id', 'unknown')
+                        print(f"   ⚠️ Timed out scenario: {scenario_id}")
+                        results.append({
+                            'scenario_id': scenario_id,
+                            'success': False,
+                            'result': {'error': 'Result processing timeout (60s)'},
+                            's3_location': None,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        completed_count += 1
+                    except Exception as e:
+                        print(f"❌ Error processing scenario result: {e}")
+                        scenario = future_to_scenario.get(future, {})
+                        scenario_id = scenario.get('scenario_id', 'unknown')
+                        results.append({
+                            'scenario_id': scenario_id,
+                            'success': False,
+                            'result': {'error': str(e)},
+                            's3_location': None,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        completed_count += 1
+                        
+            except TimeoutError:
+                print(f"🚨 EXECUTION TIMEOUT: Maximum execution time ({execution_timeout}s) exceeded!")
+                print(f"   📊 Completed: {completed_count}/{len(scenarios)} scenarios")
+                
+                # Mark remaining scenarios as failed
+                for future, scenario in future_to_scenario.items():
+                    if future not in [f for f in future_to_scenario.keys() if f.done()]:
+                        results.append({
+                            'scenario_id': scenario.get('scenario_id', 'unknown'),
+                            'success': False,
+                            'result': {'error': f'Execution timeout ({execution_timeout}s)'},
+                            's3_location': None,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        completed_count += 1
         
         # Final summary
         successful = sum(1 for r in results if r['success'])
@@ -776,17 +909,31 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     print(f"   🔢 Scenarios/Day: {scenarios_per_day}")
     print(f"   📈 Total Scenarios: {total_scenarios}")
     
+    # Timeout analysis and recommendations
+    print(f"\n🔧 TIMEOUT ANALYSIS:")
+    complexity_factor = 1.0
+    if len(args.methods) >= 3:
+        complexity_factor *= 3.0
+        print(f"   ⚠️ High method complexity: {len(args.methods)} methods (+3x time)")
+    if args.num_eval >= 1000:
+        complexity_factor *= (args.num_eval / 100)  # 1000 simulations = 10x baseline
+        print(f"   ⚠️ High simulation count: {args.num_eval} simulations (+{args.num_eval/100:.1f}x time)")
+    
+    estimated_scenario_time = 10 * complexity_factor  # Base: 10s per scenario
+    print(f"   ⏱️ Estimated per-scenario time: {estimated_scenario_time:.1f}s")
+    
+    if estimated_scenario_time >= 600:  # 10+ minutes
+        print(f"   🚨 WARNING: Scenarios may timeout! Consider:")
+        print(f"      • Reducing --num_eval (current: {args.num_eval})")
+        print(f"      • Using fewer methods (current: {len(args.methods)})")
+        print(f"      • Running methods separately")
+    
     # Execution plan
     print(f"\n📋 EXECUTION PLAN:")
     print(f"   📊 Total scenarios: {total_scenarios}")
     
-    # Time estimation based on method complexity
-    if len(args.methods) == 1:
-        estimated_time = total_scenarios * 6 / args.parallel  # 6s per scenario for single method
-    elif len(args.methods) == 2:
-        estimated_time = total_scenarios * 15 / args.parallel  # 15s per scenario for 2 methods
-    else:
-        estimated_time = total_scenarios * 45 / args.parallel  # 45s per scenario for 3+ methods
+    # Time estimation based on method complexity and simulations
+    estimated_time = total_scenarios * estimated_scenario_time / args.parallel
     
     print(f"   ⏱️ Estimated time: {estimated_time:.0f}s ({estimated_time/60:.1f} min)")
     print(f"   💰 Estimated cost: ~${total_scenarios * 0.0001:.2f} (Lambda invocations)")
