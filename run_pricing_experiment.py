@@ -50,15 +50,29 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Global flag for graceful shutdown
+# Global flags for shutdown handling
 shutdown_requested = False
+force_exit_count = 0
 
 def signal_handler(signum, frame):
-    """Handle Ctrl+C gracefully"""
-    global shutdown_requested
-    print(f"\n🛑 Shutdown requested (signal {signum}). Waiting for current scenarios to complete...")
-    print("   Press Ctrl+C again to force exit.")
-    shutdown_requested = True
+    """Handle Ctrl+C gracefully with immediate force exit on second press"""
+    global shutdown_requested, force_exit_count
+    force_exit_count += 1
+    
+    if force_exit_count == 1:
+        print(f"\n🛑 Shutdown requested (signal {signum}). Stopping execution...")
+        print("   Press Ctrl+C again to FORCE EXIT immediately.")
+        shutdown_requested = True
+    else:
+        print(f"\n💥 FORCE EXIT! Terminating NOW...")
+        import os
+        import sys
+        try:
+            # Try graceful exit first
+            sys.exit(1)
+        except:
+            # Force exit if graceful fails
+            os._exit(1)
 
 # Register signal handler
 signal.signal(signal.SIGINT, signal_handler)
@@ -93,6 +107,10 @@ class ExperimentRunner:
         """Invoke Lambda with exponential backoff and proper timeout handling"""
         
         for attempt in range(self.max_retries):
+            # Check for shutdown before each attempt
+            if shutdown_requested:
+                return False, {'error': 'Shutdown requested during Lambda invocation', 'scenario_id': scenario_id}
+                
             try:
                 # Add jitter to prevent thundering herd  
                 backoff_time = (self.base_backoff ** attempt) + random.uniform(0, 2) if attempt > 0 else 0
@@ -162,6 +180,16 @@ class ExperimentRunner:
     def process_scenario(self, scenario_params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a single scenario with improved error handling"""
         scenario_id = scenario_params['scenario_id']
+        
+        # Check for shutdown at the start
+        if shutdown_requested:
+            return {
+                'scenario_id': scenario_id,
+                'success': False,
+                'result': {'error': 'Shutdown requested'},
+                's3_location': None,
+                'timestamp': datetime.now().isoformat()
+            }
         
         try:
             if not self.production_mode:
@@ -256,6 +284,11 @@ class ExperimentRunner:
             # Submit all scenarios with progress tracking
             future_to_scenario = {}
             for scenario in scenarios:
+                # Check for shutdown during submission
+                if shutdown_requested:
+                    print(f"🛑 Shutdown requested during submission, stopping at {submitted_count}/{len(scenarios)}")
+                    break
+                    
                 try:
                     future = executor.submit(self.process_scenario, scenario)
                     future_to_scenario[future] = scenario
@@ -265,8 +298,13 @@ class ExperimentRunner:
                 except Exception as e:
                     print(f"   ❌ Failed to submit scenario {scenario.get('scenario_id', 'unknown')}: {e}")
             
-            print(f"✅ All {submitted_count} scenarios submitted to {adaptive_workers} workers")
+            print(f"✅ Submitted {submitted_count}/{len(scenarios)} scenarios to {adaptive_workers} workers")
             print(f"⏳ Waiting for completions...")
+            
+            # Early exit if all submission was cancelled
+            if submitted_count == 0:
+                print("🛑 No scenarios submitted, exiting...")
+                return []
             
             # Process completed scenarios with timeout and progress tracking
             start_time = time.time()
@@ -277,9 +315,16 @@ class ExperimentRunner:
             
             try:
                 for future in as_completed(future_to_scenario, timeout=execution_timeout):
-                    # Check for shutdown request
+                    # Check for shutdown request first
                     if shutdown_requested:
                         print(f"🛑 Shutdown requested, cancelling remaining scenarios...")
+                        # Cancel all remaining futures
+                        cancelled_count = 0
+                        for remaining_future in future_to_scenario:
+                            if not remaining_future.done():
+                                if remaining_future.cancel():
+                                    cancelled_count += 1
+                        print(f"   ✅ Cancelled {cancelled_count} pending scenarios")
                         break
                     
                     try:
@@ -913,16 +958,37 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     print(f"\n🔧 TIMEOUT ANALYSIS:")
     complexity_factor = 1.0
     if len(args.methods) >= 3:
-        complexity_factor *= 3.0
-        print(f"   ⚠️ High method complexity: {len(args.methods)} methods (+3x time)")
+        complexity_factor *= 2.0  # Reduced from 3x to 2x
+        print(f"   ⚠️ High method complexity: {len(args.methods)} methods (+2x time)")
     if args.num_eval >= 1000:
-        complexity_factor *= (args.num_eval / 100)  # 1000 simulations = 10x baseline
-        print(f"   ⚠️ High simulation count: {args.num_eval} simulations (+{args.num_eval/100:.1f}x time)")
+        complexity_factor *= (args.num_eval / 500)  # More realistic: 1000 simulations = 2x baseline
+        print(f"   ⚠️ High simulation count: {args.num_eval} simulations (+{args.num_eval/500:.1f}x time)")
     
-    estimated_scenario_time = 10 * complexity_factor  # Base: 10s per scenario
+    estimated_scenario_time = 5 * complexity_factor  # Base: 5s per scenario (more realistic)
     print(f"   ⏱️ Estimated per-scenario time: {estimated_scenario_time:.1f}s")
     
-    if estimated_scenario_time >= 600:  # 10+ minutes
+    # More aggressive warnings for Lambda timeout (900s = 15 minutes)
+    if estimated_scenario_time >= 900:  # 15+ minutes (Lambda max)
+        print(f"   🚨 CRITICAL: Scenarios WILL timeout (Lambda max: 15min)!")
+        print(f"      💡 REQUIRED fixes:")
+        print(f"         • Reduce --num_eval to <500 (current: {args.num_eval})")
+        print(f"         • Use 1-2 methods max (current: {len(args.methods)})")
+        print(f"         • Or run methods separately")
+        print(f"      ⚠️  Current config will fail!")
+        
+        # Give user a chance to abort
+        if not args.production and not args.dry_run:
+            try:
+                print("\n❓ Continue anyway? This will likely fail and hang. (y/N): ", end='', flush=True)
+                response = input()
+                if response.lower() not in ['y', 'yes']:
+                    print("🛑 Experiment aborted. Please adjust parameters.")
+                    return 1
+            except (KeyboardInterrupt, EOFError):
+                print("\n🛑 Experiment aborted by user.")
+                return 1
+                
+    elif estimated_scenario_time >= 600:  # 10+ minutes
         print(f"   🚨 WARNING: Scenarios may timeout! Consider:")
         print(f"      • Reducing --num_eval (current: {args.num_eval})")
         print(f"      • Using fewer methods (current: {len(args.methods)})")
