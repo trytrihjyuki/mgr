@@ -44,10 +44,14 @@ import pandas as pd
 import numpy as np
 import io
 
-# Configure logging
+# Configure logging with enhanced timestamps
 logging.basicConfig(
-    level=logging.WARNING,  # Reduced from INFO
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO,  # Restored INFO level for better tracking
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(f'experiment_run_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    ]
 )
 
 # Global flags for shutdown handling
@@ -63,22 +67,37 @@ def signal_handler(signum, frame):
         print(f"\n🛑 Shutdown requested (signal {signum}). Stopping execution...")
         print("   Press Ctrl+C again to FORCE EXIT immediately.")
         shutdown_requested = True
+        logging.warning(f"Shutdown requested via signal {signum}")
     else:
         print(f"\n💥 FORCE EXIT! Terminating NOW...")
+        logging.error("Force exit requested - terminating immediately")
         import os
         import sys
         try:
+            # Kill any child processes if psutil is available
+            import psutil
+            current_process = psutil.Process()
+            children = current_process.children(recursive=True)
+            for child in children:
+                child.kill()
+            logging.info(f"Killed {len(children)} child processes")
+        except ImportError:
+            logging.warning("psutil not available - cannot kill child processes automatically")
+        except Exception as e:
+            logging.warning(f"Error killing child processes: {e}")
+        
+        try:
             # Try graceful exit first
-            sys.exit(1)
+            sys.exit(130)  # Standard exit code for SIGINT
         except:
             # Force exit if graceful fails
-            os._exit(1)
+            os._exit(130)
 
 # Register signal handler
 signal.signal(signal.SIGINT, signal_handler)
 
 class ExperimentRunner:
-    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5):
+    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5, max_experiment_duration=0):
         """Initialize the unified experiment runner with Hikima-consistent defaults"""
         # Configure clients with proper timeouts
         import botocore.config
@@ -107,8 +126,127 @@ class ExperimentRunner:
         self.batch_size = max(1, min(batch_size, 10))  # 1-10 scenarios per batch
         self.use_batch_processing = batch_size > 1
         
+        # Configurable maximum execution time (0 = no timeout)
+        self.max_experiment_duration = max_experiment_duration if max_experiment_duration else 0
+        
+        # Circuit breaker for lambda failures to prevent spam
+        self.circuit_breaker = {
+            'failure_count': 0,
+            'failure_threshold': 5,  # Open circuit after 5 consecutive failures (more aggressive)
+            'last_failure_time': 0,
+            'timeout_duration': 180,  # 3 minutes (shorter timeout)
+            'state': 'closed',  # closed, open, half-open
+            'rate_limit_count': 0,  # Track rate limit failures specifically
+            'rate_limit_threshold': 3  # Open after 3 rate limit failures
+        }
+        
+        # Error tracking for better reporting
+        self.error_patterns = {}
+        self.lambda_health_status = 'healthy'  # healthy, degraded, unhealthy
+        
+    def check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker allows lambda invocation."""
+        current_time = time.time()
+        
+        if self.circuit_breaker['state'] == 'open':
+            # Check if timeout has elapsed
+            if current_time - self.circuit_breaker['last_failure_time'] > self.circuit_breaker['timeout_duration']:
+                self.circuit_breaker['state'] = 'half-open'
+                print(f"🔄 Circuit breaker moving to half-open state")
+                return True
+            else:
+                remaining_time = self.circuit_breaker['timeout_duration'] - (current_time - self.circuit_breaker['last_failure_time'])
+                print(f"🚫 Circuit breaker OPEN - {remaining_time:.0f}s remaining")
+                return False
+        
+        return True
+    
+    def record_lambda_success(self):
+        """Record successful lambda invocation."""
+        if self.circuit_breaker['state'] == 'half-open':
+            self.circuit_breaker['state'] = 'closed'
+            self.circuit_breaker['failure_count'] = 0
+            print(f"✅ Circuit breaker closed - lambda healthy")
+        elif self.circuit_breaker['state'] == 'closed':
+            # Reset failure count on success
+            self.circuit_breaker['failure_count'] = max(0, self.circuit_breaker['failure_count'] - 1)
+        
+        self.lambda_health_status = 'healthy'
+    
+    def record_lambda_failure(self, error_message: str):
+        """Record lambda failure and update circuit breaker."""
+        self.circuit_breaker['failure_count'] += 1
+        self.circuit_breaker['last_failure_time'] = time.time()
+        
+        # Track error patterns
+        error_type = self._classify_error(error_message)
+        self.error_patterns[error_type] = self.error_patterns.get(error_type, 0) + 1
+        
+        # Special handling for rate limit errors (more aggressive)
+        if error_type == 'rate_limit':
+            self.circuit_breaker['rate_limit_count'] += 1
+            print(f"⚠️ Rate limit failure #{self.circuit_breaker['rate_limit_count']}: {error_message}")
+            
+            # Open circuit immediately on rate limit threshold
+            if self.circuit_breaker['rate_limit_count'] >= self.circuit_breaker['rate_limit_threshold']:
+                self.circuit_breaker['state'] = 'open'
+                self.lambda_health_status = 'unhealthy'
+                print(f"🚫 Circuit breaker OPENED due to rate limiting ({self.circuit_breaker['rate_limit_count']} rate limit failures)")
+                return
+        
+        # Update health status for general failures
+        if self.circuit_breaker['failure_count'] >= self.circuit_breaker['failure_threshold']:
+            self.circuit_breaker['state'] = 'open'
+            self.lambda_health_status = 'unhealthy'
+            print(f"⚠️ Circuit breaker OPENED - too many failures ({self.circuit_breaker['failure_count']})")
+        elif self.circuit_breaker['failure_count'] >= self.circuit_breaker['failure_threshold'] // 2:
+            self.lambda_health_status = 'degraded'
+            print(f"⚠️ Lambda health degraded - {self.circuit_breaker['failure_count']} failures")
+    
+    def _classify_error(self, error_message: str) -> str:
+        """Classify error type for tracking with enhanced rate limit detection."""
+        error_lower = error_message.lower()
+        
+        # More comprehensive rate limiting detection
+        rate_limit_indicators = [
+            'rate limit', 'throttl', 'throttling', 'rate exceeded', 
+            'too many requests', 'limit exceeded', 'quota exceeded',
+            'provisioned concurrency', 'concurrent executions exceeded',
+            'service unavailable', 'busy', 'lambda is scaling',
+            'toomanyrequestsexception', 'throttlingexception'
+        ]
+        
+        if any(indicator in error_lower for indicator in rate_limit_indicators):
+            return 'rate_limit'
+        elif 'timeout' in error_lower or 'time out' in error_lower:
+            return 'timeout'
+        elif 'memory' in error_lower or 'out of memory' in error_lower:
+            return 'memory'
+        elif 'permission' in error_lower or 'access denied' in error_lower:
+            return 'permission'
+        elif 'invalid' in error_lower or 'bad request' in error_lower:
+            return 'invalid_request'
+        else:
+            return 'unknown'
+    
+    def get_lambda_health_summary(self) -> Dict[str, Any]:
+        """Get lambda health summary."""
+        return {
+            'status': self.lambda_health_status,
+            'circuit_breaker_state': self.circuit_breaker['state'],
+            'failure_count': self.circuit_breaker['failure_count'],
+            'error_patterns': self.error_patterns,
+            'success_count': self.success_count,
+            'error_count': self.error_count,
+            'success_rate': self.success_count / max(1, self.success_count + self.error_count)
+        }
+        
     def invoke_lambda_with_retry(self, payload: Dict[str, Any], scenario_id: str) -> Tuple[bool, Dict[str, Any]]:
         """Invoke Lambda with exponential backoff and proper timeout handling"""
+        
+        # Check circuit breaker before attempting
+        if not self.check_circuit_breaker():
+            return False, {'error': 'Circuit breaker is open - lambda service unavailable', 'scenario_id': scenario_id}
         
         for attempt in range(self.max_retries):
             # Check for shutdown before each attempt
@@ -147,8 +285,11 @@ class ExperimentRunner:
                     # Check if Lambda function returned an error (even with 200 status)
                     if isinstance(result, dict) and 'errorMessage' in result:
                         error_msg = f"Lambda function error: {result.get('errorType', 'Unknown')} - {result.get('errorMessage', 'No message')}"
+                        self.record_lambda_failure(error_msg)
                         return False, {'error': error_msg, 'scenario_id': scenario_id}
                     
+                    # Success
+                    self.record_lambda_success()
                     return True, result
                 else:
                     error_msg = f"Lambda returned status {response['StatusCode']}"
@@ -177,8 +318,11 @@ class ExperimentRunner:
                         return False, {'error': f'Timeout after retries (client timeout: {self.client_timeout}s)', 'scenario_id': scenario_id}
                 
                 else:
+                    self.record_lambda_failure(str(e))
                     return False, {'error': str(e), 'scenario_id': scenario_id}
         
+        # Max retries exceeded
+        self.record_lambda_failure('Max retries exceeded')
         return False, {'error': 'Max retries exceeded', 'scenario_id': scenario_id}
     
     def invoke_lambda_batch_with_retry(self, batch_payload: Dict[str, Any], batch_id: str) -> Tuple[bool, Dict[str, Any]]:
@@ -356,11 +500,36 @@ class ExperimentRunner:
             success, result = self.invoke_lambda_batch_with_retry(batch_payload, batch_id)
             
             if success and isinstance(result, dict):
-                # Parse Lambda response to extract individual scenario results
-                if result.get('batch_mode') and 'results' in result:
+                # Check if Lambda function returned an error (even with 200 status)
+                if 'errorMessage' in result:
+                    error_msg = f"Lambda function error: {result.get('errorType', 'Unknown')} - {result.get('errorMessage', 'No message')}"
+                    return [{
+                        'scenario_id': scenario.get('scenario_id', f'batch_{batch_id}_scenario_{i}'),
+                        'success': False,
+                        'result': {'error': error_msg},
+                        's3_location': None,
+                        'timestamp': datetime.now().isoformat()
+                    } for i, scenario in enumerate(batch_scenarios)]
+                
+                # Parse Lambda response - handle both direct response and body wrapper
+                batch_data = None
+                if 'body' in result:
+                    # Lambda response wrapped in body (direct invocation)
+                    try:
+                        batch_data = json.loads(result['body'])
+                    except json.JSONDecodeError as e:
+                        if not self.production_mode:
+                            print(f"   ❌ JSON decode error in batch response: {e}")
+                        batch_data = None
+                else:
+                    # Direct response (no body wrapper)
+                    batch_data = result
+                
+                # Process batch data
+                if batch_data and batch_data.get('batch_mode') and 'results' in batch_data:
                     batch_results = []
                     
-                    for i, scenario_result in enumerate(result['results']):
+                    for i, scenario_result in enumerate(batch_data['results']):
                         scenario_id = scenario_result.get('scenario_id', f'batch_{batch_id}_scenario_{i}')
                         
                         # Check if scenario was successful
@@ -405,11 +574,19 @@ class ExperimentRunner:
                     return batch_results
                 else:
                     # Handle non-batch response format
-                    error_msg = result.get('error', 'Invalid batch response format')
+                    error_details = "Unknown response format"
+                    if batch_data:
+                        error_details = f"batch_mode={batch_data.get('batch_mode')}, has_results={'results' in batch_data}"
+                    elif 'body' in result:
+                        error_details = f"body content (first 200 chars): {result['body'][:200]}"
+                    
+                    if not self.production_mode:
+                        print(f"   🔍 Batch response debug: {error_details}")
+                    
                     return [{
                         'scenario_id': scenario.get('scenario_id', f'batch_{batch_id}_scenario_{i}'),
                         'success': False,
-                        'result': {'error': error_msg},
+                        'result': {'error': f'Invalid batch response format: {error_details}'},
                         's3_location': None,
                         'timestamp': datetime.now().isoformat()
                     } for i, scenario in enumerate(batch_scenarios)]
@@ -651,7 +828,7 @@ class ExperimentRunner:
             last_progress_time = start_time
             
             # Monitor execution with timeout and shutdown handling
-            execution_timeout = 7200  # 2 hours max execution
+            execution_timeout = self.max_experiment_duration if self.max_experiment_duration > 0 else 7200  # Use configured timeout or default 2 hours
             
             try:
                 for future in as_completed(future_to_scenario, timeout=execution_timeout):
@@ -666,6 +843,20 @@ class ExperimentRunner:
                                     cancelled_count += 1
                         print(f"   ✅ Cancelled {cancelled_count} pending scenarios")
                         break
+                    
+                    # Check if experiment is taking too long (only if timeout is configured)
+                    if self.max_experiment_duration > 0:
+                        elapsed_time = time.time() - start_time
+                        if elapsed_time > self.max_experiment_duration:
+                            print(f"⏰ Experiment timeout reached ({self.max_experiment_duration}s), stopping execution...")
+                            # Cancel remaining futures
+                            cancelled_count = 0
+                            for remaining_future in future_to_scenario:
+                                if not remaining_future.done():
+                                    if remaining_future.cancel():
+                                        cancelled_count += 1
+                            print(f"   ✅ Cancelled {cancelled_count} pending scenarios due to timeout")
+                            break
                     
                     try:
                         result = future.result(timeout=60)  # Increased to 60s timeout per result
@@ -745,9 +936,73 @@ class ExperimentRunner:
         
         return results
     
+    def check_daily_save_status(self, day: int, eval_func: str, args) -> bool:
+        """Check if daily results are already saved to S3."""
+        import os
+        
+        # Check local cache first
+        cache_dir = f"daily_cache_{args.year}_{args.month:02d}"
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"day_{day:02d}_{eval_func}_saved.json")
+        
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r') as f:
+                    save_info = json.load(f)
+                    if save_info.get('saved_to_s3', False):
+                        print(f"   ⏭️ Daily save for Day {day} {eval_func} already completed - skipping")
+                        return True
+            except Exception as e:
+                print(f"   ⚠️ Error checking daily save cache: {e}")
+        
+        # Check S3 directly
+        try:
+            s3_prefix = f"experiments/type={args.vehicle_type}/eval={eval_func}/borough={args.borough}/year={args.year}/month={args.month:02d}/day={day:02d}/"
+            response = self.s3_client.list_objects_v2(
+                Bucket='magisterka',
+                Prefix=s3_prefix,
+                MaxKeys=1
+            )
+            
+            if response.get('Contents'):
+                print(f"   ⏭️ Daily save for Day {day} {eval_func} found in S3 - skipping")
+                # Update local cache
+                save_info = {
+                    'saved_to_s3': True,
+                    's3_prefix': s3_prefix,
+                    'timestamp': datetime.now().isoformat()
+                }
+                with open(cache_file, 'w') as f:
+                    json.dump(save_info, f)
+                return True
+                
+        except Exception as e:
+            print(f"   ⚠️ Error checking S3 for daily save: {e}")
+        
+        return False
+    
+    def mark_daily_save_complete(self, day: int, eval_func: str, args, s3_location: str):
+        """Mark daily save as complete in local cache."""
+        import os
+        
+        cache_dir = f"daily_cache_{args.year}_{args.month:02d}"
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"day_{day:02d}_{eval_func}_saved.json")
+        
+        save_info = {
+            'saved_to_s3': True,
+            's3_location': s3_location,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        with open(cache_file, 'w') as f:
+            json.dump(save_info, f)
+        
+        print(f"   ✅ Marked Day {day} {eval_func} as saved to S3")
+
     def aggregate_and_save_results(self, results: List[Dict[str, Any]], args, training_id: str) -> Dict[str, str]:
-        """Aggregate all scenario results and save them by day to S3 in the requested format."""
-        print(f"\n📊 AGGREGATING RESULTS BY DAY...")
+        """Aggregate all scenario results and save them by day to S3 with daily save checking."""
+        print(f"\n📊 AGGREGATING RESULTS BY DAY (with daily save checking)...")
         
         # Group results by day and eval function
         results_by_day_eval = {}
@@ -789,6 +1044,13 @@ class ExperimentRunner:
                 continue
                 
             print(f"   📅 Processing Day {day_num}, Eval: {eval_func} ({len(day_scenarios)} scenarios)")
+            
+            # Check if already saved
+            if self.check_daily_save_status(day_num, eval_func, args):
+                # Still add to saved_paths for reporting
+                s3_location = f"s3://magisterka/experiments/type={args.vehicle_type}/eval={eval_func}/borough={args.borough}/year={args.year}/month={args.month:02d}/day={day_num:02d}/"
+                saved_paths[f"day{day_num:02d}_{eval_func}"] = s3_location
+                continue
             
             # Generate experiment ID and timestamp for this day's experiment
             experiment_id = f"{random.randint(10000, 99999)}"
@@ -1050,6 +1312,9 @@ class ExperimentRunner:
                 s3_location = f"s3://magisterka/{base_path}/"
                 saved_paths[f"day{day_num:02d}_{eval_func}"] = s3_location
                 
+                # Mark as saved in cache
+                self.mark_daily_save_complete(day_num, eval_func, args, s3_location)
+                
                 print(f"   ✅ Saved Day {day_num} {eval_func}: {s3_location}")
                 print(f"      📁 Files: experiment_summary.json, results.parquet")
                 print(f"      🔢 Experiment ID: {experiment_id}")
@@ -1210,6 +1475,7 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     
     # Execution options
     parser.add_argument('--parallel', type=int, default=3, help='Parallel workers (default: 3)')
+    parser.add_argument('--timeout', type=int, default=0, help='Maximum experiment duration in seconds (0=no timeout, default: 0)')
     parser.add_argument('--batch_size', type=int, default=5, help='Batch size for Lambda processing (1-10, default: 5)')
     parser.add_argument('--no_batch', action='store_true', help='Disable batch processing (use single scenario mode)')
     parser.add_argument('--production', action='store_true', help='Production mode (minimal logging)')
@@ -1388,7 +1654,8 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     runner = ExperimentRunner(
         parallel_workers=args.parallel,
         production_mode=args.production,
-        batch_size=batch_size
+        batch_size=batch_size,
+        max_experiment_duration=args.timeout
     )
     
     results = runner.run_experiments(scenarios)

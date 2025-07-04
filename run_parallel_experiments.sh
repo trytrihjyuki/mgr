@@ -13,12 +13,19 @@ set -e
 YEAR=2019
 MONTH=10
 TOTAL_DAYS=31  # Number of days to process (adjust for month)
-HOURS="8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
+HOURS=""  # Will be set by hour_start/hour_end parameters below
 WINDOW=5
-ACCEPTANCE_FUNC="PL"
-METHODS="MinMaxCostFlow,MAPS,LinUCB,LP"
-VEHICLE_TYPE="green"
-NUM_EVAL=1000
+ACCEPTANCE_FUNC="PL,Sigmoid"
+METHODS="LP,MinMaxCostFlow,LinUCB,MAPS"
+VEHICLE_TYPE="yellow"
+BOROUGH="Manhattan"
+NUM_EVAL=20
+HOUR_START=0
+HOUR_END=24
+TIME_INTERVAL=5
+TIME_UNIT="m"
+PARALLEL_WORKERS=2
+SKIP_TRAINING="--skip_training"
 
 # Output configuration
 OUTPUT_DIR="parallel_experiments_$(date +%Y%m%d_%H%M%S)"
@@ -44,12 +51,15 @@ usage() {
     echo "  Year: $YEAR"
     echo "  Month: $MONTH"
     echo "  Total Days: $TOTAL_DAYS"
-    echo "  Hours: $HOURS"
-    echo "  Window: $WINDOW minutes"
-    echo "  Function: $ACCEPTANCE_FUNC"
-    echo "  Methods: $METHODS"
+    echo "  Borough: $BOROUGH"
     echo "  Vehicle Type: $VEHICLE_TYPE"
+    echo "  Acceptance Functions: $ACCEPTANCE_FUNC"
+    echo "  Methods: $METHODS"
+    echo "  Time Window: ${HOUR_START}:00-${HOUR_END}:00"
+    echo "  Time Interval: $TIME_INTERVAL$TIME_UNIT"
+    echo "  Parallel Workers: $PARALLEL_WORKERS"
     echo "  Num Eval: $NUM_EVAL"
+    echo "  Skip Training: $SKIP_TRAINING"
     echo "  Output Dir: $OUTPUT_DIR"
     exit 1
 }
@@ -109,13 +119,17 @@ run_experiment_process() {
         --year=$YEAR \
         --month=$MONTH \
         --days=$days_csv \
-        --hours=$HOURS \
-        --window=$WINDOW \
-        --func=$ACCEPTANCE_FUNC \
-        --methods=$METHODS \
+        --borough=$BOROUGH \
         --vehicle_type=$VEHICLE_TYPE \
+        --eval=$ACCEPTANCE_FUNC \
+        --methods=$METHODS \
+        --parallel=$PARALLEL_WORKERS \
+        $SKIP_TRAINING \
         --num_eval=$NUM_EVAL \
-        --output_dir="$OUTPUT_DIR/process_$process_id" \
+        --hour_start=$HOUR_START \
+        --hour_end=$HOUR_END \
+        --time_interval=$TIME_INTERVAL \
+        --time_unit=$TIME_UNIT \
         > "$log_file" 2>&1
     
     local exit_code=$?
@@ -155,9 +169,11 @@ EOF
 
 echo "🎯 Parallel Ride-Hailing Pricing Experiments"
 echo "📅 Period: $YEAR-$(printf "%02d" $MONTH) (Days 1-$TOTAL_DAYS)"
-echo "⏰ Hours: $HOURS"
+echo "🏙️ Location: $BOROUGH, $VEHICLE_TYPE taxis"
+echo "⏰ Time Window: ${HOUR_START}:00-${HOUR_END}:00 (${TIME_INTERVAL}${TIME_UNIT} intervals)"
 echo "🔧 Methods: $METHODS"
 echo "📊 Evaluations: $NUM_EVAL per scenario"
+echo "⚙️ Config: $PARALLEL_WORKERS workers, $SKIP_TRAINING"
 echo "📁 Output: $OUTPUT_DIR"
 echo ""
 

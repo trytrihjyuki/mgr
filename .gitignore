@@ -315,6 +315,7 @@ sample_data/
 # Experiment working directories
 experiment_*/
 simulation_*/
+parallel_experiments*/
 
 # S3 sync directories
 s3_cache/
