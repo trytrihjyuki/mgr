@@ -613,12 +613,20 @@ run_enhanced_experiment_process() {
         
         # Wait for the process while checking for shutdown and progress-based timeout
         local wait_count=0
-        local last_progress_check=""
+        local last_progress_check=0  # Initialize to 0, not empty string
         local last_progress_time=$(date +%s)
         local no_progress_timeout=1200  # 20 minutes without progress = timeout (increased from 15)
         local grace_period=300  # 5 minute grace period after detecting slow progress
         local max_absolute_timeout=${MAX_PROCESS_TIMEOUT:-0}  # 0 = no absolute timeout
         local process_appears_slow=false
+        
+        # Get initial progress to set baseline
+        sleep 5  # Give process time to start and create initial logs
+        local initial_progress=$(extract_batch_progress "$log_file" true)
+        if [ -n "$initial_progress" ] && [ "$initial_progress" -gt 0 ] 2>/dev/null; then
+            last_progress_check="$initial_progress"
+            log_info "📊 Initial progress for day $day: $initial_progress scenarios"
+        fi
         
         while kill -0 $python_pid 2>/dev/null; do
             if [ "$SHUTDOWN_REQUESTED" = true ]; then
@@ -639,10 +647,12 @@ run_enhanced_experiment_process() {
                 
                 local current_progress_number=$(extract_batch_progress "$log_file" true)  # Get simplified number for comparison
                 
+                # Check for progress (with improved logging on important events only)
+                
                 # Check if progress has changed (more completed scenarios)
-                if [ -n "$current_progress_number" ] && [ "$current_progress_number" -gt "${last_progress_check:-0}" ] 2>/dev/null; then
+                if [ -n "$current_progress_number" ] && [ "$current_progress_number" -gt "$last_progress_check" ] 2>/dev/null; then
                     # Progress detected! Reset the no-progress timer
-                    local old_progress=${last_progress_check:-0}
+                    local old_progress=$last_progress_check
                     local progress_delta=$((current_progress_number - old_progress))
                     last_progress_time=$current_time
                     last_progress_check="$current_progress_number"
@@ -650,11 +660,12 @@ run_enhanced_experiment_process() {
                     # Check if process is slow (less than 10 scenarios in 30 seconds)
                     if [ $progress_delta -lt 10 ] && [ "$old_progress" -gt 0 ]; then
                         process_appears_slow=true
-                        log_info "📈 Slow progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in 30s)"
+                        log_info "📈 Slow progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in 30s) ✅TIMER_RESET"
                     else
                         process_appears_slow=false
-                        log_info "📈 Progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in 30s)"
+                        log_info "📈 Progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in 30s) ✅TIMER_RESET"
                     fi
+                # If no progress detected, we'll just wait (reduced logging to avoid spam)
                 fi
             fi
             
@@ -673,7 +684,7 @@ run_enhanced_experiment_process() {
                 else
                     log_warning "⏰ No progress timeout for day $day - no batch progress for ${time_since_progress}s (limit: ${effective_timeout}s)"
                 fi
-                log_warning "   Last progress: ${last_progress_check:-0} scenarios completed"
+                log_warning "   Last progress: $last_progress_check scenarios completed"
                 log_warning "   Log file sync and final check..."
                 
                 # Final check with log sync before killing
@@ -681,8 +692,8 @@ run_enhanced_experiment_process() {
                 sleep 2
                 local final_progress=$(extract_batch_progress "$log_file" true)
                 
-                if [ "$final_progress" -gt "${last_progress_check:-0}" ] 2>/dev/null; then
-                    log_warning "   📈 Late progress detected: $final_progress scenarios (was ${last_progress_check:-0})"
+                if [ -n "$final_progress" ] && [ "$final_progress" -gt "$last_progress_check" ] 2>/dev/null; then
+                    log_warning "   📈 Late progress detected: $last_progress_check → $final_progress scenarios"
                     log_warning "   ⏳ Giving process another chance..."
                     last_progress_time=$current_time
                     last_progress_check="$final_progress"
@@ -715,10 +726,20 @@ run_enhanced_experiment_process() {
                 local progress_age=$((current_time - last_progress_time))
                 
                 if [ -n "$progress_info" ]; then
-                    if [ $progress_age -lt 60 ]; then
-                        log_info "⏳ Day $day (${wait_count}s, PID: $python_pid): $progress_info [ACTIVE]"
+                    # Check if we've recently detected progress (within last 2 minutes)
+                    if [ $progress_age -lt 120 ]; then
+                        log_info "⏳ Day $day (${wait_count}s, PID: $python_pid): $progress_info [ACTIVE - last update ${progress_age}s ago]"
                     else
-                        log_info "⏳ Day $day (${wait_count}s, PID: $python_pid): $progress_info [STALE ${progress_age}s]"
+                        log_info "⏳ Day $day (${wait_count}s, PID: $python_pid): $progress_info [STALE ${progress_age}s] - checking..."
+                        
+                        # Do an immediate progress check to see if we missed an update
+                        sync 2>/dev/null || true
+                        local fresh_progress=$(extract_batch_progress "$log_file" true)
+                        if [ -n "$fresh_progress" ] && [ "$fresh_progress" -gt "$last_progress_check" ] 2>/dev/null; then
+                            log_info "   🔄 Found fresh progress: $last_progress_check → $fresh_progress, updating timer"
+                            last_progress_time=$current_time
+                            last_progress_check="$fresh_progress"
+                        fi
                     fi
                 else
                     log_info "⏳ Day $day (${wait_count}s, PID: $python_pid): Waiting for progress... [${progress_age}s since last]"
