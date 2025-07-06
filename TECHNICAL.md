@@ -22,6 +22,49 @@ cd lambdas/pricing-benchmark
 ./deploy.sh
 ```
 
+## Enhanced Parallel Execution
+
+### Overview
+The enhanced parallel execution system (`enhanced_parallel_experiments.sh`) provides:
+- **Multi-Process**: 3 parallel processes handling different days
+- **Smart Timeout**: Progress-based timeout (not time-based)
+- **Daily Saves**: Automatic S3 upload after each day
+- **Circuit Breaker**: Prevents spam on broken lambdas
+- **Recovery**: Resume from interruptions
+
+### Configuration
+```bash
+# Edit script variables at top of enhanced_parallel_experiments.sh
+YEAR=2019
+MONTH=10
+TOTAL_DAYS=31
+BOROUGH="Manhattan"
+VEHICLE_TYPE="yellow"
+METHODS="LP,MinMaxCostFlow,LinUCB,MAPS"
+ACCEPTANCE_FUNC="PL,Sigmoid"
+PARALLEL_WORKERS=1
+NUM_EVAL=20
+```
+
+### Execution
+```bash
+# Run enhanced parallel execution
+./enhanced_parallel_experiments.sh
+
+# Monitor progress in real-time
+tail -f parallel_experiments_*/logs/master.log
+
+# Check individual process logs
+tail -f parallel_experiments_*/logs/process_1.log
+```
+
+### Monitoring Features
+- **Progress Tracking**: Real-time batch completion monitoring
+- **Health Checks**: Memory, disk, and process monitoring
+- **Smart Timeout**: Only kills processes with no progress for 20+ minutes
+- **Circuit Breaker**: Stops after 5 consecutive failures
+- **Process Coordination**: Staggered starts to prevent AWS rate limiting
+
 ## Data Operations
 
 ### 1. Data Check
@@ -57,29 +100,6 @@ aws s3 ls s3://magisterka/models/linucb/green_Bronx_201907/
 # trained_model.pkl (contains A matrices, b vectors, feature dimensions)
 ```
 
-#### **Data Validation Script**
-```bash
-# Quick validation of data integrity
-python -c "
-import boto3
-s3 = boto3.client('s3')
-
-# Check critical files
-files = [
-    'datasets/yellow/year=2019/month=10/yellow_tripdata_2019-10.parquet',
-    'datasets/area_information.csv',
-    'models/linucb/yellow_Manhattan_201907/trained_model.pkl'
-]
-
-for file in files:
-    try:
-        s3.head_object(Bucket='magisterka', Key=file)
-        print(f'✅ {file}')
-    except:
-        print(f'❌ {file} - MISSING')
-"
-```
-
 ### 2. Data Download
 
 #### **TLC Data Sources**
@@ -103,26 +123,7 @@ aws s3 cp green_tripdata_2019-10.parquet s3://magisterka/datasets/green/year=201
 aws s3 cp fhv_tripdata_2019-10.parquet s3://magisterka/datasets/fhv/year=2019/month=10/
 ```
 
-#### **Data Processing Pipeline**
-```bash
-# Automated download script for multiple months
-for month in {07..10}; do
-    echo "Processing 2019-${month}"
-    
-    # Download
-    curl -O https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2019-${month}.parquet
-    curl -O https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_2019-${month}.parquet
-    
-    # Upload to S3 with partitioning
-    aws s3 cp yellow_tripdata_2019-${month}.parquet s3://magisterka/datasets/yellow/year=2019/month=${month}/
-    aws s3 cp green_tripdata_2019-${month}.parquet s3://magisterka/datasets/green/year=2019/month=${month}/
-    
-    # Cleanup
-    rm *_tripdata_2019-${month}.parquet
-done
-```
-
-#### **LinUCB Model Preparation**
+### 3. LinUCB Model Preparation
 ```bash
 # Generate pre-trained models (optional, speeds up experiments)
 python prepare_hikima_matrices.py
@@ -132,9 +133,9 @@ python prepare_hikima_matrices.py
 # - Stored in s3://magisterka/models/linucb/{vehicle}_{borough}_{period}/
 ```
 
-### 3. Run Experiment
+## Single Day Experiments
 
-#### **Single Method Testing**
+### **Single Method Testing**
 ```bash
 # Test LP method only (fastest validation)
 python run_pricing_experiment.py \
@@ -147,8 +148,8 @@ python run_pricing_experiment.py \
 # 📊 Hikima Configuration: 10:00-20:00, 5min intervals = 120 scenarios/day
 # ✅ Success: 120 (100.0%) ⚡ Rate: 2.0 scenarios/second
 ```
-gut
-#### **Full Algorithm Comparison**
+
+### **Full Algorithm Comparison**
 ```bash
 # Run all 4 methods with both evaluation functions
 python run_pricing_experiment.py \
@@ -164,7 +165,7 @@ python run_pricing_experiment.py \
 # - MAPS: ~1-2 scenarios/second
 ```
 
-#### **Custom Time Windows**
+### **Custom Time Windows**
 ```bash
 # High-frequency analysis (30-second intervals)
 python run_pricing_experiment.py \
@@ -175,50 +176,104 @@ python run_pricing_experiment.py \
   --parallel=3 --skip_training
 
 # Result: 240 scenarios (2 hours × 120 per hour)
-
-# Low-frequency analysis (15-minute intervals)
-python run_pricing_experiment.py \
-  --year=2019 --month=10 --day=1 \
-  --borough=Queens --vehicle_type=yellow \
-  --eval=Sigmoid --methods=MAPS \
-  --hour_start=8 --hour_end=20 --time_interval=15 --time_unit=m \
-  --parallel=3 --skip_training
-
-# Result: 48 scenarios (12 hours × 4 per hour)
 ```
 
-#### **Production Batch Processing**
+## Debugging Common Issues
+
+### **Lambda Invocation Hanging**
+If the Python process starts but makes no progress:
+
+1. **Check Lambda Function Status**
 ```bash
-# Process multiple days efficiently
-for day in {1..7}; do
-    echo "Processing day ${day}"
-    python run_pricing_experiment.py \
-      --year=2019 --month=10 --day=${day} \
-      --borough=Manhattan --vehicle_type=yellow \
-      --eval=PL,Sigmoid --methods=LP,LinUCB \
-      --parallel=3 --skip_training \
-      --production
-done
+# Verify Lambda function exists and is deployable
+aws lambda get-function --function-name rideshare-pricing-benchmark
+
+# Check recent CloudWatch logs
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/rideshare-pricing-benchmark \
+  --start-time $(date -d '1 hour ago' +%s)000
+```
+
+2. **Debug Lambda Invocation**
+```bash
+# Test Lambda function directly
+aws lambda invoke \
+  --function-name rideshare-pricing-benchmark \
+  --payload '{"year": 2019, "month": 10, "day": 1, "borough": "Manhattan", "vehicle_type": "yellow", "acceptance_function": "PL", "methods": ["LP"]}' \
+  --cli-binary-format raw-in-base64-out \
+  response.json
+
+# Check response
+cat response.json
+```
+
+3. **Check Data Access**
+```bash
+# Verify S3 permissions
+aws s3 ls s3://magisterka/datasets/yellow/year=2019/month=10/
+
+# Test data download
+aws s3 cp s3://magisterka/datasets/yellow/year=2019/month=10/yellow_tripdata_2019-10.parquet ./test_data.parquet
+```
+
+### **Progress Detection Issues**
+If progress monitoring shows "0 scenarios completed":
+
+1. **Check Log Files**
+```bash
+# Look for actual progress in log files
+grep -E "(scenarios|Batch|completed)" parallel_experiments_*/logs/process_*.log
+
+# Check for error patterns
+grep -E "(ERROR|Failed|Timeout)" parallel_experiments_*/logs/process_*.log
+```
+
+2. **Verify Progress Extraction**
+```bash
+# Test progress extraction function manually
+log_file="parallel_experiments_*/logs/process_1.log"
+if [ -f "$log_file" ]; then
+    progress=$(tail -50 "$log_file" | grep -E "(scenarios|Batch.*completed)" | tail -1)
+    echo "Latest progress: $progress"
+fi
+```
+
+### **Circuit Breaker Activation**
+If processes are being killed due to circuit breaker:
+
+1. **Check Error Patterns**
+```bash
+# Look for rate limiting errors
+grep -E "(Rate.*limit|Throttling|429)" parallel_experiments_*/logs/process_*.log
+
+# Check for AWS service errors
+grep -E "(ServiceException|ClientError)" parallel_experiments_*/logs/process_*.log
+```
+
+2. **Adjust Circuit Breaker Settings**
+```bash
+# Edit enhanced_parallel_experiments.sh
+CIRCUIT_BREAKER_THRESHOLD=10  # Increase from 5 to 10
 ```
 
 ## Result Validation
 
-#### **Check S3 Output**
+### **Check S3 Output**
 ```bash
 # Verify experiment results were saved
 aws s3 ls s3://magisterka/experiments/type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/
 
 # Download and inspect results
-aws s3 cp s3://magisterka/experiments/type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/20250627_experiment.json ./
+aws s3 cp s3://magisterka/experiments/type=yellow/eval=PL/borough=Manhattan/year=2019/month=10/day=01/$(date +%Y%m%d)_experiment.json ./
 
 # Quick results summary
 python -c "
 import json
-with open('20250627_experiment.json') as f:
+with open('$(date +%Y%m%d)_experiment.json') as f:
     data = json.load(f)
     
-print(f'Scenarios: {len(data["scenarios"])}')
-print(f'Methods: {list(data["method_performance_summary"].keys())}')
+print(f'Scenarios: {len(data[\"scenarios\"])}')
+print(f'Methods: {list(data[\"method_performance_summary\"].keys())}')
 
 for method, perf in data['method_performance_summary'].items():
     obj_val = perf['objective_value']['mean']
@@ -227,7 +282,7 @@ for method, perf in data['method_performance_summary'].items():
 "
 ```
 
-#### **Performance Monitoring**
+### **Performance Monitoring**
 ```bash
 # Monitor Lambda function performance
 aws logs filter-log-events --log-group-name /aws/lambda/rideshare-pricing-benchmark \
@@ -240,59 +295,9 @@ aws logs filter-log-events --log-group-name /aws/lambda/rideshare-pricing-benchm
   --filter-pattern "ERROR"
 ```
 
-## Troubleshooting
+## System Optimization
 
-#### **Common Issues**
-
-**1. Lambda Timeout**
-```bash
-# Increase timeout for complex scenarios
-aws lambda update-function-configuration \
-  --function-name rideshare-pricing-benchmark \
-  --timeout 900
-```
-
-**2. Memory Errors**
-```bash
-# Increase memory allocation
-aws lambda update-function-configuration \
-  --function-name rideshare-pricing-benchmark \
-  --memory-size 10240
-```
-
-**3. Data Not Found**
-```bash
-# Check exact S3 paths
-aws s3 ls s3://magisterka/datasets/ --recursive | grep "2019-10"
-
-# Verify file permissions
-aws s3api head-object --bucket magisterka --key datasets/yellow/year=2019/month=10/yellow_tripdata_2019-10.parquet
-```
-
-**4. LinUCB Model Missing**
-```bash
-# Check if pre-trained model exists
-aws s3 ls s3://magisterka/models/linucb/yellow_Manhattan_201907/
-
-# Force training if needed (takes 10-20 minutes)
-python run_pricing_experiment.py \
-  --year=2019 --month=10 --day=1 \
-  --borough=Manhattan --vehicle_type=yellow \
-  --eval=PL --methods=LinUCB \
-  --force_training
-```
-
-#### **Performance Optimization**
-
-**1. Parallel Execution Tuning**
-```bash
-# Adjust based on AWS limits and data complexity
---parallel=10   # Conservative (simple scenarios)
---parallel=25   # Aggressive (complex scenarios)
---parallel=50   # Maximum (simple scenarios, good data)
-```
-
-**2. Resource Allocation**
+### **Lambda Configuration**
 ```bash
 # High-performance configuration
 aws lambda update-function-configuration \
@@ -306,22 +311,24 @@ aws lambda update-function-configuration \
   }'
 ```
 
-#### **Data Quality Issues**
+### **Parallel Execution Tuning**
+```bash
+# Conservative settings (stable)
+--parallel=2   # For complex scenarios with 4 methods
+--num_eval=20  # Reduced Monte Carlo simulations
 
-**1. Empty Scenarios**
-- Common in low-demand periods (early morning, late night)
-- Expected behavior, results in 0 objective value
-- Consider adjusting time windows for analysis periods
+# Aggressive settings (faster)
+--parallel=5   # For simple scenarios with 1-2 methods
+--num_eval=100 # More simulations for better statistics
+```
 
-**2. Large Datasets**
-- May cause memory issues for some boroughs/periods
-- Use smaller time windows or filter by geographic area
-- Consider data sampling for exploratory analysis
-
-**3. Model Performance**
-- LinUCB requires sufficient training data
-- MAPS sensitive to area granularity
-- MinMaxCostFlow may converge slowly with large instances
+### **Circuit Breaker Configuration**
+```bash
+# Edit enhanced_parallel_experiments.sh for custom settings
+CIRCUIT_BREAKER_THRESHOLD=5      # Failures before stopping
+PROGRESS_TIMEOUT=1200            # 20 minutes without progress
+STAGGER_DELAY=10                 # Seconds between process starts
+```
 
 ## System Limits
 
@@ -329,4 +336,6 @@ aws lambda update-function-configuration \
 - **Memory**: 10GB maximum per Lambda instance  
 - **Concurrent Executions**: 1000 default AWS limit
 - **S3 Storage**: Unlimited (pay per use)
-- **Scenario Complexity**: Tested up to 500 requests, 300 taxis per scenario 
+- **Scenario Complexity**: Tested up to 500 requests, 300 taxis per scenario
+- **Parallel Processes**: 3 recommended for optimal performance
+- **Progress Timeout**: 20 minutes without batch progress triggers termination 

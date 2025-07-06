@@ -5,9 +5,11 @@ FROM public.ecr.aws/lambda/python:3.11
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies first (they change less frequently)
-RUN yum update -y && \
-    yum install -y gcc g++ && \
+# Install system dependencies with retry logic and skip update
+# Note: Lambda base images are kept current, so yum update is not needed
+RUN yum install -y gcc gcc-c++ make || \
+    (sleep 5 && yum install -y gcc gcc-c++ make) || \
+    (sleep 10 && yum install -y gcc gcc-c++ make) && \
     yum clean all && \
     rm -rf /var/cache/yum
 

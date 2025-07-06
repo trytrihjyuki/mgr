@@ -13,14 +13,7 @@ aws s3 ls s3://magisterka/datasets/yellow/year=2019/month=10/
 aws s3 ls s3://magisterka/models/linucb/yellow_Manhattan_201907/
 ```
 
-### 2. Data Download
-```bash
-# Download parquet files to S3 (if needed)
-# Data structure: s3://magisterka/datasets/{vehicle_type}/year={year}/month={month:02d}/
-# Example: s3://magisterka/datasets/yellow/year=2019/month=10/yellow_tripdata_2019-10.parquet
-```
-
-### 3. Run Experiment
+### 2. Single Day Experiment
 ```bash
 # Standard Hikima experiment (120 scenarios: 10:00-20:00, 5min intervals)
 python run_pricing_experiment.py \
@@ -29,24 +22,37 @@ python run_pricing_experiment.py \
   --eval=PL,Sigmoid --methods=LP,MinMaxCostFlow,LinUCB,MAPS \
   --parallel=3 --skip_training
 
-# Custom time window (240 scenarios: 10:00-12:00, 30s intervals)  
+# Custom time window (48 scenarios: 8:00-20:00, 15min intervals)  
 python run_pricing_experiment.py \
   --year=2019 --month=10 --day=1 \
   --borough=Manhattan --vehicle_type=green \
   --eval=PL --methods=LP \
-  --hour_start=10 --hour_end=12 --time_interval=30 --time_unit=s \
+  --hour_start=8 --hour_end=20 --time_interval=15 --time_unit=m \
   --parallel=2 --skip_training
-
-# Hikima consistency check (warnings for non-standard parameters)
-python run_pricing_experiment.py \
-  --year=2019 --month=10 --day=1 \
-  --borough=Manhattan --vehicle_type=yellow \
-  --eval=PL --methods=LP \
-  --hour_start=9 --hour_end=17 --time_interval=15 \
-  --dry_run
 ```
 
-## Framework Components
+### 3. Multi-Day Parallel Execution
+```bash
+# Enhanced parallel execution for entire month
+./enhanced_parallel_experiments.sh
+
+# This runs:
+# - 3 parallel processes handling different days
+# - Smart progress monitoring with 20-minute timeout
+# - Daily S3 saves with automatic resume capability
+# - Circuit breaker to prevent spam on broken lambdas
+# - Full experiment tracking and recovery
+```
+
+## Core Features
+
+### **Enhanced Parallel Execution**
+- **Multi-Process**: 3 parallel processes handling different days
+- **Smart Timeout**: Only kills processes with no progress for 20+ minutes
+- **Daily Saves**: Automatic S3 upload after each day completes
+- **Circuit Breaker**: Prevents spam on broken lambdas (5 failures = halt)
+- **Progress Tracking**: Real-time monitoring of batch progress
+- **Recovery**: Automatic resume from interruptions
 
 ### **Pricing Algorithms**
 - **LP**: Gupta-Nagarajan Linear Program optimization
@@ -67,21 +73,38 @@ python run_pricing_experiment.py \
 - **Manhattan**: Highest density, uses 30s time intervals in Hikima
 - **Bronx/Queens/Brooklyn**: Lower density, uses 300s time intervals in Hikima
 
-## Time Window Configuration
+## Configuration Options
 
-### **Standard Hikima**
+### **Day Selection**
+```bash
+# Single day
+--day=6
+
+# Multiple specific days
+--days=1,6,11,16,21,26,31
+
+# Day range
+--start_day=1 --end_day=7
+
+# Modulo pattern (every 5th day starting from day 1)
+--days_modulo=5,1 --total_days=31
+```
+
+### **Time Window Configuration**
+
+#### **Standard Hikima**
 ```bash
 --hour_start=10 --hour_end=20 --time_interval=5 --time_unit=m
 # Result: 120 scenarios (10 hours × 12 intervals/hour)
 ```
 
-### **High-Frequency Analysis**
+#### **High-Frequency Analysis**
 ```bash
 --hour_start=14 --hour_end=16 --time_interval=30 --time_unit=s  
 # Result: 240 scenarios (2 hours × 120 intervals/hour)
 ```
 
-### **Custom Research**
+#### **Custom Research**
 ```bash
 --hour_start=8 --hour_end=22 --time_interval=15 --time_unit=m
 # Result: 56 scenarios (14 hours × 4 intervals/hour)
@@ -110,6 +133,16 @@ Each file contains:
 - **Parallel Processing**: Up to 50 concurrent Lambda executions
 - **Speed**: 1-7 scenarios/second depending on algorithm complexity
 - **Cost**: ~$0.01-0.05 per day experiment
+- **Reliability**: Smart timeout and circuit breaker prevent hanging
+
+## Monitoring
+
+The enhanced parallel execution provides comprehensive monitoring:
+- **Real-time Progress**: Batch completion tracking
+- **Health Checks**: Memory, disk, and process monitoring
+- **Timeout Management**: Progress-based timeout (not time-based)
+- **Error Classification**: Rate limit detection and handling
+- **Recovery**: Automatic resume from last completed day
 
 ## See Also
 
