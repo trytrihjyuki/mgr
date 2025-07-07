@@ -133,6 +133,7 @@ class ExperimentRunner:
         self.max_lambda_concurrency = max(1, min(max_lambda_concurrency, 700))  # Updated cap to 700
         self.lambda_semaphore = threading.Semaphore(self.max_lambda_concurrency)
         self.active_lambda_count = 0
+        self.lambda_count_lock = threading.Lock()  # FIXED: Add back the missing lock
         
         if self.max_lambda_concurrency > 500:
             print(f"⚠️  High concurrency set: {self.max_lambda_concurrency} concurrent Lambda invocations")
