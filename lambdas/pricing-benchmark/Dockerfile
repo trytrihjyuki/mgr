@@ -1,10 +1,13 @@
 # Use the official AWS Lambda Python base image
 FROM public.ecr.aws/lambda/python:3.9
 
-# Install system dependencies for scientific packages
-RUN yum update -y && \
-    yum install -y gcc gcc-c++ make && \
-    yum clean all
+# Install system dependencies with retry logic and skip update
+# Note: Lambda base images are kept current, so yum update is not needed
+RUN yum install -y gcc gcc-c++ make || \
+    (sleep 5 && yum install -y gcc gcc-c++ make) || \
+    (sleep 10 && yum install -y gcc gcc-c++ make) && \
+    yum clean all && \
+    rm -rf /var/cache/yum
 
 # Copy requirements file
 COPY requirements.txt .
