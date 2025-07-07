@@ -97,7 +97,7 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 class ExperimentRunner:
-    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5, max_experiment_duration=0):
+    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5, max_experiment_duration=0, max_lambda_concurrency=150):
         """Initialize the unified experiment runner with Hikima-consistent defaults"""
         # Configure clients with proper timeouts
         import botocore.config
@@ -128,6 +128,15 @@ class ExperimentRunner:
         
         # Configurable maximum execution time (0 = no timeout)
         self.max_experiment_duration = max_experiment_duration if max_experiment_duration else 0
+        
+        # Lambda concurrency management
+        self.max_lambda_concurrency = max(1, min(max_lambda_concurrency, 400))  # Cap at AWS account limit
+        self.lambda_semaphore = threading.Semaphore(self.max_lambda_concurrency)
+        self.active_lambda_count = 0
+        self.lambda_count_lock = threading.Lock()
+        
+        if not self.production_mode:
+            print(f"🔧 Lambda concurrency limit: {self.max_lambda_concurrency} (prevents hitting AWS {400} limit)")
         
         # Circuit breaker for lambda failures to prevent spam
         self.circuit_breaker = {
@@ -252,8 +261,18 @@ class ExperimentRunner:
             # Check for shutdown before each attempt
             if shutdown_requested:
                 return False, {'error': 'Shutdown requested during Lambda invocation', 'scenario_id': scenario_id}
+            
+            # Acquire semaphore to respect concurrency limit
+            acquired = self.lambda_semaphore.acquire(blocking=True, timeout=300)  # 5 minute timeout
+            if not acquired:
+                return False, {'error': 'Lambda concurrency limit timeout', 'scenario_id': scenario_id}
                 
             try:
+                with self.lambda_count_lock:
+                    self.active_lambda_count += 1
+                    if not self.production_mode and self.active_lambda_count % 10 == 1:
+                        print(f"⚡ Active Lambda invocations: {self.active_lambda_count}/{self.max_lambda_concurrency}")
+                
                 # Add jitter to prevent thundering herd  
                 backoff_time = (self.base_backoff ** attempt) + random.uniform(0, 2) if attempt > 0 else 0
                 if attempt > 0:
@@ -320,6 +339,12 @@ class ExperimentRunner:
                 else:
                     self.record_lambda_failure(str(e))
                     return False, {'error': str(e), 'scenario_id': scenario_id}
+            
+            finally:
+                # Always release semaphore and update count
+                with self.lambda_count_lock:
+                    self.active_lambda_count = max(0, self.active_lambda_count - 1)
+                self.lambda_semaphore.release()
         
         # Max retries exceeded
         self.record_lambda_failure('Max retries exceeded')
@@ -333,7 +358,17 @@ class ExperimentRunner:
             if shutdown_requested:
                 return False, {'error': 'Shutdown requested during Lambda batch invocation', 'batch_id': batch_id}
                 
+            # Acquire semaphore to respect concurrency limit
+            acquired = self.lambda_semaphore.acquire(blocking=True, timeout=300)  # 5 minute timeout
+            if not acquired:
+                return False, {'error': 'Lambda concurrency limit timeout', 'batch_id': batch_id}
+            
             try:
+                with self.lambda_count_lock:
+                    self.active_lambda_count += 1
+                    if not self.production_mode and self.active_lambda_count % 10 == 1:
+                        print(f"⚡ Active Lambda invocations: {self.active_lambda_count}/{self.max_lambda_concurrency}")
+                
                 # Add jitter to prevent thundering herd  
                 backoff_time = (self.base_backoff ** attempt) + random.uniform(0, 2) if attempt > 0 else 0
                 if attempt > 0:
@@ -396,6 +431,12 @@ class ExperimentRunner:
                 
                 else:
                     return False, {'error': str(e), 'batch_id': batch_id}
+            
+            finally:
+                # Always release semaphore and update count
+                with self.lambda_count_lock:
+                    self.active_lambda_count = max(0, self.active_lambda_count - 1)
+                self.lambda_semaphore.release()
         
         return False, {'error': 'Max retries exceeded', 'batch_id': batch_id}
 
@@ -1478,6 +1519,10 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     parser.add_argument('--timeout', type=int, default=0, help='Maximum experiment duration in seconds (0=no timeout, default: 0)')
     parser.add_argument('--batch_size', type=int, default=5, help='Batch size for Lambda processing (1-10, default: 5)')
     parser.add_argument('--no_batch', action='store_true', help='Disable batch processing (use single scenario mode)')
+    parser.add_argument('--max_lambda_concurrency', type=int, default=150, 
+                       help='Maximum concurrent Lambda invocations (default: 150, max: 400). Controls AWS concurrency limit to prevent hanging.')
+    
+    # Mode and output options
     parser.add_argument('--production', action='store_true', help='Production mode (minimal logging)')
     parser.add_argument('--debug', action='store_true', help='Debug mode (verbose output)')
     parser.add_argument('--dry_run', action='store_true', help='Dry run (show what would be executed)')
@@ -1655,7 +1700,8 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
         parallel_workers=args.parallel,
         production_mode=args.production,
         batch_size=batch_size,
-        max_experiment_duration=args.timeout
+        max_experiment_duration=args.timeout,
+        max_lambda_concurrency=args.max_lambda_concurrency
     )
     
     results = runner.run_experiments(scenarios)

@@ -34,25 +34,34 @@ TIME_UNIT="m"
 # ==============================
 # Override these via environment variables for different experiment types:
 # 
-# Quick experiments:     PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=1800
-# Standard experiments:  PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=0     # REDUCED from 3 to 2
-# Long experiments:      PARALLEL_WORKERS=1 NUM_PROCESSES=1 MAX_PROCESS_TIMEOUT=0     # REDUCED to 1 for safety
-# Stress tests:          PARALLEL_WORKERS=2 NUM_PROCESSES=3 MAX_PROCESS_TIMEOUT=3600  # Only for testing
+# Quick experiments:     PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=1800 MAX_LAMBDA_CONCURRENCY=100
+# Standard experiments:  PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=0 MAX_LAMBDA_CONCURRENCY=150     # REDUCED from 3 to 2
+# Long experiments:      PARALLEL_WORKERS=1 NUM_PROCESSES=1 MAX_PROCESS_TIMEOUT=0 MAX_LAMBDA_CONCURRENCY=200     # REDUCED to 1 for safety
+# Stress tests:          PARALLEL_WORKERS=2 NUM_PROCESSES=3 MAX_PROCESS_TIMEOUT=3600 MAX_LAMBDA_CONCURRENCY=300  # Only for testing
 #
 # SMART TIMEOUT: Processes are killed ONLY if no batch progress for 20 minutes
 # Slow processes (making <10 scenarios/30s) get extra 5 minutes (25 min total)
 # They can run for hours/days as long as they're making progress
 # Set MAX_PROCESS_TIMEOUT=0 to disable absolute timeout (recommended for production)
 #
-# ⚠️  CRITICAL: AWS Lambda Concurrency Limit = 400 total
-#     Each process submits ~100+ batches simultaneously
-#     3 processes = ~300+ concurrent lambdas = hits AWS limit and causes hangs
-#     SOLUTION: Use NUM_PROCESSES=2 max, or PARALLEL_WORKERS=1 (safer)
+# ⚠️  CRITICAL: AWS Lambda Concurrency Management
+#     Your account has a hard limit of 400 concurrent Lambda executions
+#     Each process can submit ~100+ batches, causing concurrency bottlenecks
+#     NEW: MAX_LAMBDA_CONCURRENCY parameter controls concurrent Lambda invocations
+#     
+#     RECOMMENDED SETTINGS:
+#     • 1 process: MAX_LAMBDA_CONCURRENCY=200 (safe)
+#     • 2 processes: MAX_LAMBDA_CONCURRENCY=150 per process = 300 total (recommended)
+#     • 3+ processes: MAX_LAMBDA_CONCURRENCY=100 per process (tight but functional)
+#
+#     Total concurrent Lambdas = NUM_PROCESSES × MAX_LAMBDA_CONCURRENCY
+#     Keep this UNDER 400 to prevent hanging!
 
-PARALLEL_WORKERS=${PARALLEL_WORKERS:-1}          # AWS parallel workers per experiment (1=safe, 2=risky)
-NUM_PROCESSES=${NUM_PROCESSES:-2}                # Total parallel experiment processes (REDUCED from 3 to 2)
-MAX_PROCESS_TIMEOUT=${MAX_PROCESS_TIMEOUT:-0}    # Absolute max time in seconds (0=no absolute timeout, recommended)
-PYTHON_TIMEOUT_ARG=${PYTHON_TIMEOUT_ARG:-0}     # Timeout passed to Python script (0=no timeout)
+PARALLEL_WORKERS=${PARALLEL_WORKERS:-1}                    # AWS parallel workers per experiment (1=safe, 2=risky)
+NUM_PROCESSES=${NUM_PROCESSES:-2}                          # Total parallel experiment processes (REDUCED from 3 to 2)
+MAX_PROCESS_TIMEOUT=${MAX_PROCESS_TIMEOUT:-0}              # Absolute max time in seconds (0=no absolute timeout, recommended)
+PYTHON_TIMEOUT_ARG=${PYTHON_TIMEOUT_ARG:-0}               # Timeout passed to Python script (0=no timeout)
+MAX_LAMBDA_CONCURRENCY=${MAX_LAMBDA_CONCURRENCY:-150}     # Maximum concurrent Lambda invocations per process (NEW!)
 SKIP_TRAINING="--skip_training"
 
 # Enhanced tracking configuration
@@ -396,6 +405,7 @@ EOF
 extract_batch_progress() {
     local log_file=$1
     local for_comparison=${2:-false}  # If true, return simplified format for progress comparison
+    local debug_mode=${3:-false}     # If true, show debug info
     
     if [ ! -f "$log_file" ]; then
         return
@@ -408,11 +418,35 @@ extract_batch_progress() {
         return
     fi
     
+    # Debug: Show what lines we're looking at (only if debug mode enabled)
+    if [ "$debug_mode" = true ]; then
+        echo "DEBUG: Last 10 lines from $log_file:" >&2
+        echo "$recent_lines" | tail -10 >&2
+        echo "DEBUG: Looking for patterns..." >&2
+    fi
+    
     # Extract the most recent progress information
-    local progress_line=$(echo "$recent_lines" | grep -E "Progress: [0-9]+/[0-9]+ \([0-9.]+%\)" | tail -1)
-    local batch_line=$(echo "$recent_lines" | grep -E "✅[0-9]+ ❌[0-9]+ \| Rate: [0-9.]+/s" | tail -1)
+    local progress_line=$(echo "$recent_lines" | grep -E "⚡.*Progress: [0-9]+/[0-9]+ \([0-9.]+%\)" | tail -1)
+    local batch_line=$(echo "$recent_lines" | grep -E "⚡.*✅[0-9]+ ❌[0-9]+ \| Rate: [0-9.]+/s" | tail -1)
+
+    # Fallback: Try to find any line with progress patterns if the main ones fail
+    if [ -z "$progress_line" ]; then
+        progress_line=$(echo "$recent_lines" | grep -E "Progress:.*[0-9]+/[0-9]+.*[0-9.]+%" | tail -1)
+    fi
+    if [ -z "$batch_line" ]; then
+        batch_line=$(echo "$recent_lines" | grep -E "✅[0-9]+.*❌[0-9]+.*Rate:.*[0-9.]+/s" | tail -1)
+    fi
+
     local eval_line=$(echo "$recent_lines" | grep -E "day[0-9]+_(PL|Sigmoid)" | tail -1)
-    local eta_line=$(echo "$recent_lines" | grep -E "ETA: [0-9]+s" | tail -1)
+    local eta_line=$(echo "$recent_lines" | grep -E "ETA: [0-9.]+[smh]|ETA: unknown" | tail -1)
+
+    # Debug: Show what patterns were found (only if debug mode enabled)
+    if [ "$debug_mode" = true ]; then
+        echo "DEBUG: progress_line='$progress_line'" >&2
+        echo "DEBUG: batch_line='$batch_line'" >&2
+        echo "DEBUG: eval_line='$eval_line'" >&2
+        echo "DEBUG: eta_line='$eta_line'" >&2
+    fi
     
     # Build progress summary
     local progress_summary=""
@@ -424,7 +458,7 @@ extract_batch_progress() {
             progress_summary="$progress_match"
         fi
     fi
-    
+
     # Extract success/failure counts and rate
     if [ -n "$batch_line" ]; then
         local success_count=$(echo "$batch_line" | sed -n 's/.*✅\([0-9]*\).*/\1/p')
@@ -454,14 +488,20 @@ extract_batch_progress() {
     
     # Extract ETA if available
     if [ -n "$eta_line" ]; then
-        local eta_seconds=$(echo "$eta_line" | sed -n 's/.*ETA: \([0-9]*\)s.*/\1/p')
-        if [ -n "$eta_seconds" ] && [ "$eta_seconds" -gt 0 ]; then
-            local eta_minutes=$((eta_seconds / 60))
-            if [ "$eta_minutes" -gt 0 ]; then
+        # Handle both numeric ETA and "unknown" ETA
+        if echo "$eta_line" | grep -q "ETA: unknown"; then
+            if [ -n "$progress_summary" ]; then
+                progress_summary="$progress_summary, ETA: unknown"
+            else
+                progress_summary="ETA: unknown"
+            fi
+        else
+            local eta_value=$(echo "$eta_line" | sed -n 's/.*ETA: \([0-9.]*[smh]\).*/\1/p')
+            if [ -n "$eta_value" ]; then
                 if [ -n "$progress_summary" ]; then
-                    progress_summary="$progress_summary, ETA: ${eta_minutes}m"
+                    progress_summary="$progress_summary, ETA: $eta_value"
                 else
-                    progress_summary="ETA: ${eta_minutes}m"
+                    progress_summary="ETA: $eta_value"
                 fi
             fi
         fi
@@ -497,6 +537,17 @@ extract_batch_progress() {
         
         if [ -n "$batch_line" ]; then
             completed_from_batch=$(echo "$batch_line" | sed -n 's/.*✅\([0-9]*\).*/\1/p')
+        fi
+        
+        # Aggressive fallback: Look for any success count (✅) followed by a number
+        if [ "$completed_from_progress" -eq 0 ] && [ "$completed_from_batch" -eq 0 ]; then
+            local any_success_line=$(echo "$recent_lines" | grep -E "✅[0-9]+" | tail -1)
+            if [ -n "$any_success_line" ]; then
+                completed_from_batch=$(echo "$any_success_line" | sed -n 's/.*✅\([0-9]*\).*/\1/p')
+                if [ "$debug_mode" = true ] && [ "$completed_from_batch" -gt 0 ]; then
+                    echo "DEBUG: Fallback found success count: $completed_from_batch from '$any_success_line'" >&2
+                fi
+            fi
         fi
         
         # Return the highest number (most recent progress)
@@ -604,6 +655,7 @@ run_enhanced_experiment_process() {
             --eval=$ACCEPTANCE_FUNC \
             --methods=$METHODS \
             --parallel=$PARALLEL_WORKERS \
+            --max_lambda_concurrency=$MAX_LAMBDA_CONCURRENCY \
             $SKIP_TRAINING \
             --num_eval=$NUM_EVAL \
             --hour_start=$HOUR_START \
@@ -644,8 +696,15 @@ run_enhanced_experiment_process() {
             
             local current_time=$(date +%s)
             
-            # Check for progress every 30 seconds
-            if [ $((wait_count % 30)) -eq 0 ]; then
+            # Check for progress more frequently when approaching timeout
+            local time_since_progress=$((current_time - last_progress_time))
+            local check_interval=30
+            # Check every 10 seconds if we're within 5 minutes of timeout
+            if [ $time_since_progress -gt 900 ]; then  # 15 minutes
+                check_interval=10
+            fi
+            
+            if [ $((wait_count % check_interval)) -eq 0 ]; then
                 # Force log file sync before checking progress (fix race condition)
                 sync 2>/dev/null || true
                 sleep 1  # Give log file time to flush
@@ -675,7 +734,7 @@ run_enhanced_experiment_process() {
             fi
             
             # Check smart timeout: only if NO progress for configured time
-            local time_since_progress=$((current_time - last_progress_time))
+            # (time_since_progress already calculated above)
             local effective_timeout=$no_progress_timeout
             
             # If process appears slow but is making progress, give it extra time
@@ -705,6 +764,8 @@ run_enhanced_experiment_process() {
                     continue
                 fi
                 
+                log_warning "   🔍 Final debug check before killing process..."
+                extract_batch_progress "$log_file" true true >/dev/null
                 log_warning "   🛑 Confirmed no progress, killing process"
                 kill -TERM $python_pid 2>/dev/null || true
                 sleep 2
@@ -744,6 +805,10 @@ run_enhanced_experiment_process() {
                             log_info "   🔄 Found fresh progress: $last_progress_check → $fresh_progress, updating timer"
                             last_progress_time=$current_time
                             last_progress_check="$fresh_progress"
+                        else
+                            # Enable debug mode when we can't find progress to help troubleshoot
+                            log_warning "   🔍 No fresh progress detected, enabling debug mode..."
+                            extract_batch_progress "$log_file" true true >/dev/null
                         fi
                     fi
                 else
@@ -850,7 +915,8 @@ save_final_status() {
         "borough": "$BOROUGH",
         "methods": "$METHODS",
         "acceptance_function": "$ACCEPTANCE_FUNC",
-        "parallel_workers": $PARALLEL_WORKERS
+        "parallel_workers": $PARALLEL_WORKERS,
+        "max_lambda_concurrency": $MAX_LAMBDA_CONCURRENCY
     },
     "results": {
         "total_days": $total,
@@ -901,7 +967,8 @@ main() {
     log_info "⏰ Time Window: ${HOUR_START}:00-${HOUR_END}:00 (${TIME_INTERVAL}${TIME_UNIT} intervals)"
     log_info "🔧 Methods: $METHODS"
     log_info "📊 Evaluations: $NUM_EVAL per scenario"
-    log_info "⚙️ Config: $PARALLEL_WORKERS workers"
+    log_info "⚙️ Config: $PARALLEL_WORKERS workers, $MAX_LAMBDA_CONCURRENCY max Lambda concurrency"
+    log_info "🛡️ Total Lambda limit: $((NUM_PROCESSES * MAX_LAMBDA_CONCURRENCY)) concurrent (AWS limit: 400)"
     log_info "📁 Output: $OUTPUT_DIR"
     
     # Check S3 connection

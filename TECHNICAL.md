@@ -342,15 +342,54 @@ STAGGER_DELAY=10                 # Seconds between process starts
 
 ## Critical AWS Lambda Concurrency Issue
 
-**⚠️ WARNING: The main failure mode is hitting AWS Lambda concurrency limits**
+**✅ FIXED: Lambda Concurrency Management System**
 
-- Each experiment process submits ~100+ batches simultaneously
+**Previous Issue (RESOLVED):**
+- Each experiment process submitted ~100+ batches simultaneously  
 - 3 processes = ~300+ concurrent Lambda functions
 - AWS account limit = 400 concurrent executions total
-- **Result**: Processes get stuck waiting for Lambda responses that never come
+- **Result**: Processes got stuck waiting for Lambda responses that never came
 
-**Solutions:**
-1. **Use NUM_PROCESSES=2 maximum** (default is now 2, not 3)
-2. **Use NUM_PROCESSES=1 for complex experiments** (4 methods, high num_eval)
-3. **Monitor Lambda concurrency**: `aws lambda get-account-settings`
-4. **Increase process stagger delay** if needed (currently 30s between starts) 
+**✅ NEW SOLUTION: Concurrency Control Parameters**
+
+1. **`--max_lambda_concurrency` parameter** (default: 150)
+   - Controls maximum concurrent Lambda invocations per process
+   - Prevents hitting AWS account limits
+   - Uses semaphore-based throttling in Python code
+
+2. **`MAX_LAMBDA_CONCURRENCY` in shell script** (default: 150)
+   - Environment variable for batch experiments
+   - Total limit = `NUM_PROCESSES × MAX_LAMBDA_CONCURRENCY`
+
+**Recommended Settings:**
+```bash
+# Conservative (safest):
+NUM_PROCESSES=1 MAX_LAMBDA_CONCURRENCY=200     # Total: 200 concurrent
+./enhanced_parallel_experiments.sh
+
+# Standard (recommended):
+NUM_PROCESSES=2 MAX_LAMBDA_CONCURRENCY=150     # Total: 300 concurrent  
+./enhanced_parallel_experiments.sh
+
+# Aggressive (for testing):
+NUM_PROCESSES=2 MAX_LAMBDA_CONCURRENCY=180     # Total: 360 concurrent
+./enhanced_parallel_experiments.sh
+
+# Single experiment:
+python run_pricing_experiment.py --max_lambda_concurrency=200 [other args]
+```
+
+**Key Benefits:**
+- ✅ **No more hanging**: Processes can't overwhelm Lambda
+- ✅ **Predictable performance**: Progress continues steadily  
+- ✅ **Resource control**: Stay within AWS limits
+- ✅ **Automatic throttling**: Built-in semaphore protection
+
+**Monitoring:**
+```bash
+# Check current concurrency usage
+grep "Active Lambda invocations" parallel_experiments_*/logs/process_*.log | tail -5
+
+# Monitor progress without hanging
+tail -f parallel_experiments_*/logs/master.log
+``` 
