@@ -35,33 +35,33 @@ TIME_UNIT="m"
 # Override these via environment variables for different experiment types:
 # 
 # Quick experiments:     PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=1800 MAX_LAMBDA_CONCURRENCY=100
-# Standard experiments:  PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=0 MAX_LAMBDA_CONCURRENCY=150     # REDUCED from 3 to 2
-# Long experiments:      PARALLEL_WORKERS=1 NUM_PROCESSES=1 MAX_PROCESS_TIMEOUT=0 MAX_LAMBDA_CONCURRENCY=200     # REDUCED to 1 for safety
-# Stress tests:          PARALLEL_WORKERS=2 NUM_PROCESSES=3 MAX_PROCESS_TIMEOUT=3600 MAX_LAMBDA_CONCURRENCY=300  # Only for testing
+# Standard experiments:  PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=0 MAX_LAMBDA_CONCURRENCY=700     # Updated default
+# Long experiments:      PARALLEL_WORKERS=1 NUM_PROCESSES=1 MAX_PROCESS_TIMEOUT=0 MAX_LAMBDA_CONCURRENCY=700     # Updated default
+# Stress tests:          PARALLEL_WORKERS=2 NUM_PROCESSES=3 MAX_PROCESS_TIMEOUT=3600 MAX_LAMBDA_CONCURRENCY=700  # Updated for high concurrency
 #
 # SMART TIMEOUT: Processes are killed ONLY if no batch progress for 20 minutes
 # Slow processes (making <10 scenarios/30s) get extra 5 minutes (25 min total)
 # They can run for hours/days as long as they're making progress
 # Set MAX_PROCESS_TIMEOUT=0 to disable absolute timeout (recommended for production)
 #
-# ⚠️  CRITICAL: AWS Lambda Concurrency Management
-#     Your account has a hard limit of 400 concurrent Lambda executions
+# ⚠️  LAMBDA CONCURRENCY MANAGEMENT
+#     Default now supports up to 700 concurrent Lambda executions
 #     Each process can submit ~100+ batches, causing concurrency bottlenecks
 #     NEW: MAX_LAMBDA_CONCURRENCY parameter controls concurrent Lambda invocations
 #     
 #     RECOMMENDED SETTINGS:
-#     • 1 process: MAX_LAMBDA_CONCURRENCY=200 (safe)
-#     • 2 processes: MAX_LAMBDA_CONCURRENCY=150 per process = 300 total (recommended)
-#     • 3+ processes: MAX_LAMBDA_CONCURRENCY=100 per process (tight but functional)
+#     • 1 process: MAX_LAMBDA_CONCURRENCY=700 (safe for high throughput)
+#     • 2 processes: MAX_LAMBDA_CONCURRENCY=350 per process = 700 total (recommended)
+#     • 3+ processes: MAX_LAMBDA_CONCURRENCY=233 per process (tight but functional)
 #
 #     Total concurrent Lambdas = NUM_PROCESSES × MAX_LAMBDA_CONCURRENCY
-#     Keep this UNDER 400 to prevent hanging!
+#     Keep this reasonable for your AWS account setup!
 
 PARALLEL_WORKERS=${PARALLEL_WORKERS:-1}                    # AWS parallel workers per experiment (1=safe, 2=risky)
 NUM_PROCESSES=${NUM_PROCESSES:-2}                          # Total parallel experiment processes (REDUCED from 3 to 2)
 MAX_PROCESS_TIMEOUT=${MAX_PROCESS_TIMEOUT:-0}              # Absolute max time in seconds (0=no absolute timeout, recommended)
 PYTHON_TIMEOUT_ARG=${PYTHON_TIMEOUT_ARG:-0}               # Timeout passed to Python script (0=no timeout)
-MAX_LAMBDA_CONCURRENCY=${MAX_LAMBDA_CONCURRENCY:-150}     # Maximum concurrent Lambda invocations per process (NEW!)
+MAX_LAMBDA_CONCURRENCY=${MAX_LAMBDA_CONCURRENCY:-700}     # Maximum concurrent Lambda invocations per process (Updated to 700!)
 SKIP_TRAINING="--skip_training"
 
 # Enhanced tracking configuration
@@ -683,6 +683,17 @@ run_enhanced_experiment_process() {
         if [ -n "$initial_progress" ] && [ "$initial_progress" -gt 0 ] 2>/dev/null; then
             last_progress_check="$initial_progress"
             log_info "📊 Initial progress for day $day: $initial_progress scenarios"
+        else
+            # Wait a bit longer and try again - sometimes logs take time to appear
+            sleep 10
+            initial_progress=$(extract_batch_progress "$log_file" true)
+            if [ -n "$initial_progress" ] && [ "$initial_progress" -gt 0 ] 2>/dev/null; then
+                last_progress_check="$initial_progress"
+                log_info "📊 Initial progress for day $day: $initial_progress scenarios (delayed detection)"
+            else
+                log_info "📊 No initial progress detected for day $day, starting from 0"
+                last_progress_check=0
+            fi
         fi
         
         while kill -0 $python_pid 2>/dev/null; do
@@ -713,8 +724,24 @@ run_enhanced_experiment_process() {
                 
                 # Check for progress (with improved logging on important events only)
                 
-                # Check if progress has changed (more completed scenarios)
+                # IMPROVED: Check if progress has changed (handle both increases AND activity detection)
+                local progress_detected=false
+                
+                # Method 1: Traditional increasing progress
                 if [ -n "$current_progress_number" ] && [ "$current_progress_number" -gt "$last_progress_check" ] 2>/dev/null; then
+                    progress_detected=true
+                elif [ -n "$current_progress_number" ] && [ "$current_progress_number" -gt 0 ] 2>/dev/null; then
+                    # Method 2: Activity detection - if we see ANY valid progress number, consider it activity
+                    # This handles cases where the experiment restarts or numbers reset
+                    local time_gap=$((current_time - last_progress_time))
+                    if [ $time_gap -gt 300 ]; then  # If it's been 5+ minutes since last progress
+                        # Reset baseline to current progress and consider this as activity
+                        progress_detected=true
+                        log_info "🔄 Progress baseline reset for day $day: $last_progress_check → $current_progress_number scenarios (gap: ${time_gap}s)"
+                    fi
+                fi
+                
+                if [ "$progress_detected" = true ]; then
                     # Progress detected! Reset the no-progress timer
                     local old_progress=$last_progress_check
                     local progress_delta=$((current_progress_number - old_progress))
@@ -722,12 +749,14 @@ run_enhanced_experiment_process() {
                     last_progress_check="$current_progress_number"
                     
                     # Check if process is slow (less than 10 scenarios in 30 seconds)
-                    if [ $progress_delta -lt 10 ] && [ "$old_progress" -gt 0 ]; then
+                    if [ $progress_delta -lt 10 ] && [ "$old_progress" -gt 0 ] && [ $progress_delta -gt 0 ]; then
                         process_appears_slow=true
-                        log_info "📈 Slow progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in 30s) ✅TIMER_RESET"
-                    else
+                        log_info "📈 Slow progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in ${check_interval}s) ✅TIMER_RESET"
+                    elif [ $progress_delta -gt 0 ]; then
                         process_appears_slow=false
-                        log_info "📈 Progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in 30s) ✅TIMER_RESET"
+                        log_info "📈 Progress detected for day $day: $old_progress → $current_progress_number scenarios (+$progress_delta in ${check_interval}s) ✅TIMER_RESET"
+                    else
+                        log_info "📈 Activity detected for day $day: $current_progress_number scenarios ✅TIMER_RESET"
                     fi
                 # If no progress detected, we'll just wait (reduced logging to avoid spam)
                 fi
@@ -868,9 +897,10 @@ run_enhanced_experiment_process() {
 }
 
 save_final_status() {
-    log_info "💾 Saving final experiment status..."
+    log_info "💾 Saving comprehensive final experiment status..."
     
     local final_status_file="$OUTPUT_DIR/final_status.json"
+    local final_parquet_file="$OUTPUT_DIR/final_results.parquet"
     local end_time=$(date +%s)
     local total_duration=$((end_time - START_TIME))
     
@@ -901,7 +931,425 @@ save_final_status() {
         success_rate=$(( completed * 100 / total ))
     fi
     
-    cat > "$final_status_file" << EOF
+    log_info "📊 Collecting detailed experiment results from S3..."
+    
+    # Create Python script to aggregate detailed metrics
+    cat > "$OUTPUT_DIR/aggregate_metrics.py" << 'EOF'
+#!/usr/bin/env python3
+
+import json
+import boto3
+import pandas as pd
+from datetime import datetime
+import numpy as np
+import sys
+import os
+from typing import Dict, List, Any
+import io
+
+def safe_float(value, default=0.0):
+    """Safely convert value to float"""
+    try:
+        return float(value) if value is not None else default
+    except (ValueError, TypeError):
+        return default
+
+def safe_int(value, default=0):
+    """Safely convert value to int"""
+    try:
+        return int(value) if value is not None else default
+    except (ValueError, TypeError):
+        return default
+
+def aggregate_experiment_results(s3_bucket: str, s3_prefix: str, experiment_id: str) -> Dict[str, Any]:
+    """Aggregate detailed experiment results from S3"""
+    
+    print(f"🔍 Scanning S3 for experiment results: s3://{s3_bucket}/{s3_prefix}/")
+    
+    s3_client = boto3.client('s3', region_name='eu-north-1')
+    
+    # List all experiment result files
+    try:
+        response = s3_client.list_objects_v2(
+            Bucket=s3_bucket,
+            Prefix=f"{s3_prefix}/",
+            Delimiter='/'
+        )
+        
+        experiment_directories = []
+        if 'CommonPrefixes' in response:
+            for prefix in response['CommonPrefixes']:
+                if 'experiments/type=' in prefix['Prefix']:
+                    experiment_directories.append(prefix['Prefix'])
+        
+        print(f"📁 Found {len(experiment_directories)} experiment directories")
+        
+    except Exception as e:
+        print(f"❌ Error scanning S3: {e}")
+        return None
+    
+    # Aggregate all experiment data
+    all_experiment_summaries = []
+    all_results_data = []
+    methods_performance = {}
+    data_statistics = {
+        'requesters': [], 'taxis': [], 
+        'trip_distances': [], 'trip_amounts': [], 
+        'ratios': []
+    }
+    
+    total_files_processed = 0
+    
+    for exp_dir in experiment_directories:
+        print(f"🔄 Processing {exp_dir}...")
+        
+        try:
+            # List all files in this experiment directory
+            response = s3_client.list_objects_v2(
+                Bucket=s3_bucket,
+                Prefix=exp_dir,
+                Delimiter='/'
+            )
+            
+            if 'CommonPrefixes' in response:
+                for day_prefix in response['CommonPrefixes']:
+                    # Look for experiment_summary.json and results.parquet files
+                    day_response = s3_client.list_objects_v2(
+                        Bucket=s3_bucket,
+                        Prefix=day_prefix['Prefix']
+                    )
+                    
+                    if 'Contents' in day_response:
+                        for obj in day_response['Contents']:
+                            if obj['Key'].endswith('/experiment_summary.json'):
+                                try:
+                                    # Download and process experiment_summary.json
+                                    summary_obj = s3_client.get_object(Bucket=s3_bucket, Key=obj['Key'])
+                                    summary_data = json.loads(summary_obj['Body'].read())
+                                    all_experiment_summaries.append(summary_data)
+                                    
+                                    # Extract data statistics
+                                    agg_stats = summary_data.get('aggregated_statistics', {})
+                                    if agg_stats:
+                                        req_stats = agg_stats.get('requesters', {})
+                                        taxi_stats = agg_stats.get('taxis', {})
+                                        
+                                        if req_stats.get('mean', 0) > 0:
+                                            data_statistics['requesters'].append({
+                                                'mean': safe_float(req_stats.get('mean')),
+                                                'std': safe_float(req_stats.get('std')),
+                                                'count': safe_int(agg_stats.get('total_scenarios', 0))
+                                            })
+                                        
+                                        if taxi_stats.get('mean', 0) > 0:
+                                            data_statistics['taxis'].append({
+                                                'mean': safe_float(taxi_stats.get('mean')),
+                                                'std': safe_float(taxi_stats.get('std')),
+                                                'count': safe_int(agg_stats.get('total_scenarios', 0))
+                                            })
+                                    
+                                    # Extract method performance
+                                    results_analysis = summary_data.get('results_basic_analysis', {})
+                                    methods_perf = results_analysis.get('methods_performance', {})
+                                    
+                                    for method_name, method_data in methods_perf.items():
+                                        if method_name not in methods_performance:
+                                            methods_performance[method_name] = {
+                                                'objective_values': [],
+                                                'computation_times': [],
+                                                'acceptance_rates': [],
+                                                'matching_ratios': [],
+                                                'scenarios_completed': 0,
+                                                'success_rate': 0.0
+                                            }
+                                        
+                                        # Aggregate method metrics
+                                        obj_vals = method_data.get('objective_values', {})
+                                        comp_times = method_data.get('computation_times', {})
+                                        acc_rates = method_data.get('acceptance_rates', {})
+                                        match_perf = method_data.get('matching_performance', {})
+                                        match_ratios = match_perf.get('matching_ratios', {})
+                                        
+                                        if obj_vals.get('mean', 0) > 0:
+                                            methods_performance[method_name]['objective_values'].append({
+                                                'mean': safe_float(obj_vals.get('mean')),
+                                                'std': safe_float(obj_vals.get('std')),
+                                                'count': safe_int(method_data.get('scenarios_completed', 0))
+                                            })
+                                        
+                                        if comp_times.get('mean', 0) > 0:
+                                            methods_performance[method_name]['computation_times'].append({
+                                                'mean': safe_float(comp_times.get('mean')),
+                                                'std': safe_float(comp_times.get('std')),
+                                                'count': safe_int(method_data.get('scenarios_completed', 0))
+                                            })
+                                        
+                                        if acc_rates.get('mean', 0) > 0:
+                                            methods_performance[method_name]['acceptance_rates'].append({
+                                                'mean': safe_float(acc_rates.get('mean')),
+                                                'std': safe_float(acc_rates.get('std')),
+                                                'count': safe_int(method_data.get('scenarios_completed', 0))
+                                            })
+                                        
+                                        if match_ratios.get('mean', 0) > 0:
+                                            methods_performance[method_name]['matching_ratios'].append({
+                                                'mean': safe_float(match_ratios.get('mean')),
+                                                'std': safe_float(match_ratios.get('std')),
+                                                'count': safe_int(method_data.get('scenarios_completed', 0))
+                                            })
+                                        
+                                        methods_performance[method_name]['scenarios_completed'] += safe_int(method_data.get('scenarios_completed', 0))
+                                        methods_performance[method_name]['success_rate'] = safe_float(method_data.get('success_rate', 0))
+                                    
+                                    total_files_processed += 1
+                                    
+                                except Exception as e:
+                                    print(f"⚠️ Error processing {obj['Key']}: {e}")
+                                    continue
+                            
+                            elif obj['Key'].endswith('/results.parquet'):
+                                try:
+                                    # Download and process results.parquet
+                                    parquet_obj = s3_client.get_object(Bucket=s3_bucket, Key=obj['Key'])
+                                    parquet_data = pd.read_parquet(io.BytesIO(parquet_obj['Body'].read()))
+                                    
+                                    # Add to comprehensive results
+                                    all_results_data.append(parquet_data)
+                                    
+                                except Exception as e:
+                                    print(f"⚠️ Error processing parquet {obj['Key']}: {e}")
+                                    continue
+                                    
+        except Exception as e:
+            print(f"❌ Error processing directory {exp_dir}: {e}")
+            continue
+    
+    print(f"✅ Processed {total_files_processed} experiment summary files")
+    print(f"✅ Found {len(all_results_data)} parquet files")
+    
+    # Calculate weighted averages for aggregated metrics
+    def calculate_weighted_average(data_list):
+        if not data_list:
+            return {'mean': 0, 'std': 0, 'total_count': 0}
+        
+        total_weighted_sum = 0
+        total_weighted_var = 0
+        total_count = 0
+        
+        for item in data_list:
+            count = item['count']
+            mean = item['mean']
+            std = item['std']
+            
+            total_weighted_sum += mean * count
+            total_weighted_var += (std ** 2 + mean ** 2) * count
+            total_count += count
+        
+        if total_count == 0:
+            return {'mean': 0, 'std': 0, 'total_count': 0}
+        
+        overall_mean = total_weighted_sum / total_count
+        overall_variance = (total_weighted_var / total_count) - (overall_mean ** 2)
+        overall_std = np.sqrt(max(0, overall_variance))
+        
+        return {
+            'mean': round(overall_mean, 3),
+            'std': round(overall_std, 3),
+            'total_count': total_count
+        }
+    
+    # Aggregate final metrics
+    final_data_stats = {}
+    for key, values in data_statistics.items():
+        final_data_stats[key] = calculate_weighted_average(values)
+    
+    final_methods_performance = {}
+    for method_name, method_data in methods_performance.items():
+        final_methods_performance[method_name] = {
+            'objective_values': calculate_weighted_average(method_data['objective_values']),
+            'computation_times': calculate_weighted_average(method_data['computation_times']),
+            'acceptance_rates': calculate_weighted_average(method_data['acceptance_rates']),
+            'matching_ratios': calculate_weighted_average(method_data['matching_ratios']),
+            'scenarios_completed': method_data['scenarios_completed'],
+            'success_rate': method_data['success_rate']
+        }
+    
+    # Combine all parquet data
+    comprehensive_results_df = None
+    if all_results_data:
+        comprehensive_results_df = pd.concat(all_results_data, ignore_index=True)
+        print(f"📊 Combined parquet data: {len(comprehensive_results_df)} total scenario results")
+    
+    return {
+        'experiment_summaries_processed': len(all_experiment_summaries),
+        'parquet_files_processed': len(all_results_data),
+        'data_statistics': final_data_stats,
+        'methods_performance': final_methods_performance,
+        'comprehensive_results': comprehensive_results_df
+    }
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Usage: python aggregate_metrics.py <s3_bucket> <s3_prefix> <experiment_id>")
+        sys.exit(1)
+    
+    s3_bucket = sys.argv[1]
+    s3_prefix = sys.argv[2]
+    experiment_id = sys.argv[3]
+    
+    # Aggregate results
+    aggregated_data = aggregate_experiment_results(s3_bucket, s3_prefix, experiment_id)
+    
+    if aggregated_data is None:
+        print("❌ Failed to aggregate results")
+        sys.exit(1)
+    
+    # Save comprehensive results
+    output_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Save detailed metrics to JSON
+    metrics_file = os.path.join(output_dir, 'detailed_metrics.json')
+    
+    # Create serializable version (exclude DataFrame)
+    serializable_data = {
+        'experiment_summaries_processed': aggregated_data['experiment_summaries_processed'],
+        'parquet_files_processed': aggregated_data['parquet_files_processed'],
+        'data_statistics': aggregated_data['data_statistics'],
+        'methods_performance': aggregated_data['methods_performance']
+    }
+    
+    with open(metrics_file, 'w') as f:
+        json.dump(serializable_data, f, indent=2)
+    
+    print(f"✅ Saved detailed metrics to {metrics_file}")
+    
+    # Save comprehensive parquet file
+    if aggregated_data['comprehensive_results'] is not None:
+        parquet_file = os.path.join(output_dir, 'final_results.parquet')
+        aggregated_data['comprehensive_results'].to_parquet(parquet_file, index=False)
+        print(f"✅ Saved comprehensive results to {parquet_file}")
+        
+        # Print parquet summary
+        df = aggregated_data['comprehensive_results']
+        print(f"📊 Parquet summary: {len(df)} rows, {len(df.columns)} columns")
+        print(f"   Methods: {df['method_name'].unique().tolist()}")
+        print(f"   Scenarios: {df['scenario_id'].nunique()} unique scenarios")
+        print(f"   Success rate: {(df['success'].sum() / len(df) * 100):.1f}%")
+    
+    print("✅ Metrics aggregation complete")
+EOF
+    
+    # Run the Python aggregation script
+    if command -v python3 >/dev/null 2>&1; then
+        log_info "🐍 Running Python metrics aggregation..."
+        cd "$OUTPUT_DIR"
+        python3 aggregate_metrics.py "$S3_BUCKET" "$S3_PREFIX/$EXPERIMENT_ID" "$EXPERIMENT_ID"
+        aggregation_success=$?
+        cd - >/dev/null
+    else
+        log_warning "⚠️ Python3 not available, skipping detailed metrics aggregation"
+        aggregation_success=1
+    fi
+    
+    # Create enhanced final status
+    if [ $aggregation_success -eq 0 ] && [ -f "$OUTPUT_DIR/detailed_metrics.json" ]; then
+        log_info "📈 Creating enhanced final status with detailed metrics..."
+        
+        # Read the detailed metrics if available
+        if command -v python3 >/dev/null 2>&1; then
+            # Use Python to merge the detailed metrics into final status
+            python3 -c "
+import json
+import sys
+from datetime import datetime
+
+# Read detailed metrics
+try:
+    with open('$OUTPUT_DIR/detailed_metrics.json', 'r') as f:
+        detailed_metrics = json.load(f)
+except:
+    detailed_metrics = {}
+
+# Create enhanced final status
+final_status = {
+    'experiment_id': '$EXPERIMENT_ID',
+    'start_time': '$START_TIME',
+    'end_time': '$end_time',
+    'duration_seconds': $total_duration,
+    'configuration': {
+        'year': $YEAR,
+        'month': $MONTH,
+        'total_days': $TOTAL_DAYS,
+        'vehicle_type': '$VEHICLE_TYPE',
+        'borough': '$BOROUGH',
+        'methods': '$METHODS',
+        'acceptance_function': '$ACCEPTANCE_FUNC',
+        'parallel_workers': $PARALLEL_WORKERS,
+        'max_lambda_concurrency': $MAX_LAMBDA_CONCURRENCY,
+        'time_window': {
+            'hour_start': $HOUR_START,
+            'hour_end': $HOUR_END,
+            'time_interval': $TIME_INTERVAL,
+            'num_eval': $NUM_EVAL
+        }
+    },
+    'results': {
+        'total_days': $total,
+        'completed_days': $completed,
+        'failed_days': $failed,
+        'success_rate': $success_rate
+    },
+    'detailed_metrics': detailed_metrics,
+    's3_bucket': '$S3_BUCKET',
+    's3_prefix': '$S3_PREFIX/$EXPERIMENT_ID',
+    'files_generated': {
+        'final_status_json': 'final_status.json',
+        'comprehensive_parquet': 'final_results.parquet' if detailed_metrics else None,
+        'detailed_metrics_json': 'detailed_metrics.json' if detailed_metrics else None
+    }
+}
+
+# Write enhanced final status
+with open('$final_status_file', 'w') as f:
+    json.dump(final_status, f, indent=2)
+
+print('✅ Enhanced final status created')
+"
+        else
+            # Fallback to basic final status
+            cat > "$final_status_file" << EOF
+{
+    "experiment_id": "$EXPERIMENT_ID",
+    "start_time": "$START_TIME",
+    "end_time": "$end_time",
+    "duration_seconds": $total_duration,
+    "configuration": {
+        "year": $YEAR,
+        "month": $MONTH,
+        "total_days": $TOTAL_DAYS,
+        "vehicle_type": "$VEHICLE_TYPE",
+        "borough": "$BOROUGH",
+        "methods": "$METHODS",
+        "acceptance_function": "$ACCEPTANCE_FUNC",
+        "parallel_workers": $PARALLEL_WORKERS,
+        "max_lambda_concurrency": $MAX_LAMBDA_CONCURRENCY
+    },
+    "results": {
+        "total_days": $total,
+        "completed_days": $completed,
+        "failed_days": $failed,
+        "success_rate": $success_rate
+    },
+    "s3_bucket": "$S3_BUCKET",
+    "s3_prefix": "$S3_PREFIX/$EXPERIMENT_ID",
+    "warning": "Detailed metrics not available - Python3 required for full analysis"
+}
+EOF
+        fi
+    else
+        log_warning "⚠️ Detailed metrics aggregation failed, creating basic final status"
+        # Create basic final status
+        cat > "$final_status_file" << EOF
 {
     "experiment_id": "$EXPERIMENT_ID",
     "start_time": "$START_TIME",
@@ -928,11 +1376,36 @@ save_final_status() {
     "s3_prefix": "$S3_PREFIX/$EXPERIMENT_ID"
 }
 EOF
+    fi
     
-    # Upload final status to S3
+    # Upload final status and additional files to S3
+    log_info "📤 Uploading final results to S3..."
     aws s3 cp "$final_status_file" "s3://$S3_BUCKET/$S3_PREFIX/$EXPERIMENT_ID/" || true
     
+    if [ -f "$OUTPUT_DIR/detailed_metrics.json" ]; then
+        aws s3 cp "$OUTPUT_DIR/detailed_metrics.json" "s3://$S3_BUCKET/$S3_PREFIX/$EXPERIMENT_ID/" || true
+    fi
+    
+    if [ -f "$OUTPUT_DIR/final_results.parquet" ]; then
+        aws s3 cp "$OUTPUT_DIR/final_results.parquet" "s3://$S3_BUCKET/$S3_PREFIX/$EXPERIMENT_ID/" || true
+        log_info "📊 Comprehensive parquet file uploaded: final_results.parquet"
+    fi
+    
+    # Clean up temporary files
+    rm -f "$OUTPUT_DIR/aggregate_metrics.py" 2>/dev/null || true
+    
     log_info "📄 Final status saved to $final_status_file"
+    log_info "🔗 S3 location: s3://$S3_BUCKET/$S3_PREFIX/$EXPERIMENT_ID/"
+    
+    # Print summary of generated files
+    log_info "📁 Generated files:"
+    log_info "   • final_status.json (enhanced with detailed metrics)"
+    if [ -f "$OUTPUT_DIR/final_results.parquet" ]; then
+        log_info "   • final_results.parquet (comprehensive scenario results)"
+    fi
+    if [ -f "$OUTPUT_DIR/detailed_metrics.json" ]; then
+        log_info "   • detailed_metrics.json (aggregated method performance)"
+    fi
 }
 
 # =============================================================================
@@ -968,7 +1441,7 @@ main() {
     log_info "🔧 Methods: $METHODS"
     log_info "📊 Evaluations: $NUM_EVAL per scenario"
     log_info "⚙️ Config: $PARALLEL_WORKERS workers, $MAX_LAMBDA_CONCURRENCY max Lambda concurrency"
-    log_info "🛡️ Total Lambda limit: $((NUM_PROCESSES * MAX_LAMBDA_CONCURRENCY)) concurrent (AWS limit: 400)"
+    log_info "🛡️ Total Lambda limit: $((NUM_PROCESSES * MAX_LAMBDA_CONCURRENCY)) concurrent (Max supported: 700 per process)"
     log_info "📁 Output: $OUTPUT_DIR"
     
     # Check S3 connection

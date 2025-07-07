@@ -97,7 +97,7 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 class ExperimentRunner:
-    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5, max_experiment_duration=0, max_lambda_concurrency=150):
+    def __init__(self, region='eu-north-1', parallel_workers=5, production_mode=True, batch_size=5, max_experiment_duration=0, max_lambda_concurrency=700):
         """Initialize the unified experiment runner with Hikima-consistent defaults"""
         # Configure clients with proper timeouts
         import botocore.config
@@ -129,14 +129,28 @@ class ExperimentRunner:
         # Configurable maximum execution time (0 = no timeout)
         self.max_experiment_duration = max_experiment_duration if max_experiment_duration else 0
         
-        # Lambda concurrency management
-        self.max_lambda_concurrency = max(1, min(max_lambda_concurrency, 400))  # Cap at AWS account limit
+        # Lambda concurrency management - increased to 700 concurrent limit
+        self.max_lambda_concurrency = max(1, min(max_lambda_concurrency, 700))  # Updated cap to 700
         self.lambda_semaphore = threading.Semaphore(self.max_lambda_concurrency)
         self.active_lambda_count = 0
-        self.lambda_count_lock = threading.Lock()
         
-        if not self.production_mode:
-            print(f"🔧 Lambda concurrency limit: {self.max_lambda_concurrency} (prevents hitting AWS {400} limit)")
+        if self.max_lambda_concurrency > 500:
+            print(f"⚠️  High concurrency set: {self.max_lambda_concurrency} concurrent Lambda invocations")
+            print(f"   Make sure your AWS account can handle this load!")
+        
+        print(f"🔧 Lambda concurrency limit: {self.max_lambda_concurrency} (max supported: 700)")
+        print(f"🔧 Using batch processing: {self.use_batch_processing} (batch size: {self.batch_size})")
+        print(f"🔧 Max experiment duration: {self.max_experiment_duration if self.max_experiment_duration else 'unlimited'}")
+        print(f"🔧 Production mode: {self.production_mode}")
+        
+        # Initialize metrics tracking
+        self.metrics = {
+            'total_lambda_invocations': 0,
+            'total_lambda_duration': 0,
+            'failed_lambda_invocations': 0,
+            'concurrency_waits': 0,
+            'max_concurrent_reached': 0
+        }
         
         # Circuit breaker for lambda failures to prevent spam
         self.circuit_breaker = {
@@ -1519,8 +1533,8 @@ Custom business hours (09:00-17:00, 10min intervals = 48 scenarios/day):
     parser.add_argument('--timeout', type=int, default=0, help='Maximum experiment duration in seconds (0=no timeout, default: 0)')
     parser.add_argument('--batch_size', type=int, default=5, help='Batch size for Lambda processing (1-10, default: 5)')
     parser.add_argument('--no_batch', action='store_true', help='Disable batch processing (use single scenario mode)')
-    parser.add_argument('--max_lambda_concurrency', type=int, default=150, 
-                       help='Maximum concurrent Lambda invocations (default: 150, max: 400). Controls AWS concurrency limit to prevent hanging.')
+    parser.add_argument('--max_lambda_concurrency', type=int, default=700,
+                       help='Maximum concurrent Lambda invocations (default: 700, max: 700). Controls AWS concurrency limit to prevent hanging.')
     
     # Mode and output options
     parser.add_argument('--production', action='store_true', help='Production mode (minimal logging)')

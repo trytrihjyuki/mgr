@@ -47,7 +47,7 @@ python run_pricing_experiment.py \
 ## Core Features
 
 ### **Enhanced Parallel Execution**
-- **Multi-Process**: 2 parallel processes handling different days (AWS limit: 400 concurrent Lambdas)
+- **Multi-Process**: 2 parallel processes handling different days (AWS limit: 700 concurrent Lambdas)
 - **Smart Timeout**: Only kills processes with no progress for 20+ minutes
 - **Daily Saves**: Automatic S3 upload after each day completes
 - **Circuit Breaker**: Prevents spam on broken lambdas (5 failures = halt)

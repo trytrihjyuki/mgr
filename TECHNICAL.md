@@ -334,7 +334,7 @@ STAGGER_DELAY=10                 # Seconds between process starts
 
 - **Lambda Execution**: 15 minutes maximum per scenario
 - **Memory**: 10GB maximum per Lambda instance  
-- **Concurrent Executions**: 400 per account (critical bottleneck)
+- **Concurrent Executions**: 700 per account (configurable limit)
 - **S3 Storage**: Unlimited (pay per use)
 - **Scenario Complexity**: Tested up to 500 requests, 300 taxis per scenario
 - **Parallel Processes**: 2 maximum recommended (3+ processes hit concurrency limits)
@@ -347,7 +347,7 @@ STAGGER_DELAY=10                 # Seconds between process starts
 **Previous Issue (RESOLVED):**
 - Each experiment process submitted ~100+ batches simultaneously  
 - 3 processes = ~300+ concurrent Lambda functions
-- AWS account limit = 400 concurrent executions total
+- AWS account limit = 700 concurrent executions (configurable)
 - **Result**: Processes got stuck waiting for Lambda responses that never came
 
 **✅ NEW SOLUTION: Concurrency Control Parameters**
