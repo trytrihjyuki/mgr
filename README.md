@@ -37,7 +37,7 @@ python run_pricing_experiment.py \
 ./enhanced_parallel_experiments.sh
 
 # This runs:
-# - 3 parallel processes handling different days
+# - 2 parallel processes handling different days (reduced from 3 due to AWS limits)
 # - Smart progress monitoring with 20-minute timeout
 # - Daily S3 saves with automatic resume capability
 # - Circuit breaker to prevent spam on broken lambdas
@@ -47,7 +47,7 @@ python run_pricing_experiment.py \
 ## Core Features
 
 ### **Enhanced Parallel Execution**
-- **Multi-Process**: 3 parallel processes handling different days
+- **Multi-Process**: 2 parallel processes handling different days (AWS limit: 400 concurrent Lambdas)
 - **Smart Timeout**: Only kills processes with no progress for 20+ minutes
 - **Daily Saves**: Automatic S3 upload after each day completes
 - **Circuit Breaker**: Prevents spam on broken lambdas (5 failures = halt)

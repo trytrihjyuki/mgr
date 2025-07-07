@@ -334,8 +334,23 @@ STAGGER_DELAY=10                 # Seconds between process starts
 
 - **Lambda Execution**: 15 minutes maximum per scenario
 - **Memory**: 10GB maximum per Lambda instance  
-- **Concurrent Executions**: 1000 default AWS limit
+- **Concurrent Executions**: 400 per account (critical bottleneck)
 - **S3 Storage**: Unlimited (pay per use)
 - **Scenario Complexity**: Tested up to 500 requests, 300 taxis per scenario
-- **Parallel Processes**: 3 recommended for optimal performance
-- **Progress Timeout**: 20 minutes without batch progress triggers termination 
+- **Parallel Processes**: 2 maximum recommended (3+ processes hit concurrency limits)
+- **Progress Timeout**: 20 minutes without batch progress triggers termination
+
+## Critical AWS Lambda Concurrency Issue
+
+**⚠️ WARNING: The main failure mode is hitting AWS Lambda concurrency limits**
+
+- Each experiment process submits ~100+ batches simultaneously
+- 3 processes = ~300+ concurrent Lambda functions
+- AWS account limit = 400 concurrent executions total
+- **Result**: Processes get stuck waiting for Lambda responses that never come
+
+**Solutions:**
+1. **Use NUM_PROCESSES=2 maximum** (default is now 2, not 3)
+2. **Use NUM_PROCESSES=1 for complex experiments** (4 methods, high num_eval)
+3. **Monitor Lambda concurrency**: `aws lambda get-account-settings`
+4. **Increase process stagger delay** if needed (currently 30s between starts) 

@@ -35,17 +35,22 @@ TIME_UNIT="m"
 # Override these via environment variables for different experiment types:
 # 
 # Quick experiments:     PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=1800
-# Standard experiments:  PARALLEL_WORKERS=1 NUM_PROCESSES=3 MAX_PROCESS_TIMEOUT=0     # No absolute timeout  
-# Long experiments:      PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=0     # No absolute timeout
-# Stress tests:          PARALLEL_WORKERS=2 NUM_PROCESSES=5 MAX_PROCESS_TIMEOUT=3600
+# Standard experiments:  PARALLEL_WORKERS=1 NUM_PROCESSES=2 MAX_PROCESS_TIMEOUT=0     # REDUCED from 3 to 2
+# Long experiments:      PARALLEL_WORKERS=1 NUM_PROCESSES=1 MAX_PROCESS_TIMEOUT=0     # REDUCED to 1 for safety
+# Stress tests:          PARALLEL_WORKERS=2 NUM_PROCESSES=3 MAX_PROCESS_TIMEOUT=3600  # Only for testing
 #
 # SMART TIMEOUT: Processes are killed ONLY if no batch progress for 20 minutes
 # Slow processes (making <10 scenarios/30s) get extra 5 minutes (25 min total)
 # They can run for hours/days as long as they're making progress
 # Set MAX_PROCESS_TIMEOUT=0 to disable absolute timeout (recommended for production)
+#
+# ⚠️  CRITICAL: AWS Lambda Concurrency Limit = 400 total
+#     Each process submits ~100+ batches simultaneously
+#     3 processes = ~300+ concurrent lambdas = hits AWS limit and causes hangs
+#     SOLUTION: Use NUM_PROCESSES=2 max, or PARALLEL_WORKERS=1 (safer)
 
 PARALLEL_WORKERS=${PARALLEL_WORKERS:-1}          # AWS parallel workers per experiment (1=safe, 2=risky)
-NUM_PROCESSES=${NUM_PROCESSES:-3}                # Total parallel experiment processes (2-5)
+NUM_PROCESSES=${NUM_PROCESSES:-2}                # Total parallel experiment processes (REDUCED from 3 to 2)
 MAX_PROCESS_TIMEOUT=${MAX_PROCESS_TIMEOUT:-0}    # Absolute max time in seconds (0=no absolute timeout, recommended)
 PYTHON_TIMEOUT_ARG=${PYTHON_TIMEOUT_ARG:-0}     # Timeout passed to Python script (0=no timeout)
 SKIP_TRAINING="--skip_training"
@@ -937,8 +942,8 @@ main() {
             
             # 🚀 COORDINATION: Stagger process starts to avoid simultaneous AWS rate limiting
             if [ $remainder -lt $NUM_PROCESSES ]; then
-                log_info "⏳ Staggering start (process $remainder), waiting 10s..."
-                sleep 10
+                log_info "⏳ Staggering start (process $remainder), waiting 30s..."
+                sleep 30  # Increased from 10s to 30s to spread out Lambda usage
             fi
         else
             log_warning "⚠️ No days found for process $remainder (remainder=$actual_remainder)"
