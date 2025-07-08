@@ -178,4 +178,5 @@ Each file contains detailed results from the experiment run, including performan
 
 - **TECHNICAL.md**: Detailed setup, validation, and troubleshooting guide.
 - **`run_pricing_experiment.py`**: The core Python script that runs inside the Docker container.
-- **`aws_ec2_launcher.py`**: The Python script responsible for the cloud infrastructure automation. 
+- **`aws_ec2_launcher.py`**: The Python script responsible for the cloud infrastructure automation.
+- **`scripts/cleanup_resources.sh`**: A utility script to terminate all project-related EC2 instances. 
