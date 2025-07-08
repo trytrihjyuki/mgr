@@ -127,6 +127,29 @@ The `launch_ec2_experiments.sh` script is highly flexible. Here are some example
   --num-parallel 16
 ```
 
+### Scenario 6: Comprehensive "Kitchen Sink" Example
+
+**Goal:** Provide a single, complete example that showcases all available command-line arguments in use for a highly specific research scenario.
+
+**Configuration:** This customized run targets a multi-day period in a specific borough with a non-default vehicle type, a subset of methods, a single evaluation function, and a high number of parallel jobs on a powerful instance.
+
+```bash
+# A highly customized, multi-day run on a powerful instance
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-11-01 \
+  --end-date 2019-11-05 \
+  --start-hour 8 \
+  --end-hour 22 \
+  --borough "Brooklyn" \
+  --vehicle-type "fhv" \
+  --method "LinUCB,LP" \
+  --eval "Sigmoid" \
+  --num-iter 5000 \
+  --num-parallel 32 \
+  --ec2-type "extra-large" \
+  --seed 999
+```
+
 ## 3. Infrastructure Configuration
 
 Before running the launcher script, you need to provide your AWS infrastructure details. The recommended method is to create a `.env` file in the root of the project.

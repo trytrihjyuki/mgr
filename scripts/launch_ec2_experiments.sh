@@ -49,7 +49,7 @@ END_HOUR=23
 BOROUGH="Manhattan"
 VEHICLE_TYPE="green"
 METHOD="LinUCB"
-ACCEPTANCE_FUNCTION="PL"
+EVAL_FUNCTIONS="PL,Sigmoid"
 NUM_ITER=1000
 NUM_PARALLEL=4
 EC2_TYPE="small"
@@ -68,8 +68,8 @@ function usage() {
     echo "  --end-hour <HH>               End hour (0-23) (default: 23)"
     echo "  --borough <name>              NYC Borough (default: Manhattan)"
     echo "  --vehicle-type <type>         Taxi type: green, yellow, fhv (default: green)"
-    echo "  --method <name>               Pricing method: LinUCB, LP, etc. (default: LinUCB)"
-    echo "  --acceptance-function <name>  Acceptance function: PL, Sigmoid (default: PL)"
+    echo "  --method <name>               Pricing method(s): LinUCB,LP (default: LinUCB)"
+    echo "  --eval <functions>            Comma-separated evaluation functions: PL,Sigmoid (default: PL,Sigmoid)"
     echo "  --num-iter <n>                Number of Monte Carlo iterations (default: 1000)"
     echo "  --num-parallel <n>            Number of parallel jobs (default: 4)"
     echo "  --ec2-type <size>             Instance size: small, medium, large, xlarge, extra-large (default: small)"
@@ -87,7 +87,7 @@ while [[ "$#" -gt 0 ]]; do
         --borough) BOROUGH="$2"; shift ;;
         --vehicle-type) VEHICLE_TYPE="$2"; shift ;;
         --method) METHOD="$2"; shift ;;
-        --acceptance-function) ACCEPTANCE_FUNCTION="$2"; shift ;;
+        --eval) EVAL_FUNCTIONS="$2"; shift ;;
         --num-iter) NUM_ITER="$2"; shift ;;
         --num-parallel) NUM_PARALLEL="$2"; shift ;;
         --ec2-type) EC2_TYPE="$2"; shift ;;
@@ -222,7 +222,7 @@ function monitor_experiment() {
 CONTAINER_ARGS="--start-date ${START_DATE} --end-date ${END_DATE} "
 CONTAINER_ARGS+="--start-hour ${START_HOUR} --end-hour ${END_HOUR} "
 CONTAINER_ARGS+="--borough ${BOROUGH} --vehicle-type ${VEHICLE_TYPE} "
-CONTAINER_ARGS+="--method ${METHOD} --acceptance-function ${ACCEPTANCE_FUNCTION} "
+CONTAINER_ARGS+="--method \"${METHOD}\" --eval ${EVAL_FUNCTIONS} "
 CONTAINER_ARGS+="--num-iter ${NUM_ITER} --num-parallel ${NUM_PARALLEL} --seed ${SEED} "
 CONTAINER_ARGS+="--experiment-id ${EXPERIMENT_ID}"
 
@@ -235,8 +235,8 @@ echo "End Date:          ${END_DATE}"
 echo "Time Range:        ${START_HOUR}:00 - ${END_HOUR}:00"
 echo "Borough:           ${BOROUGH}"
 echo "Vehicle Type:      ${VEHICLE_TYPE}"
-echo "Method:            ${METHOD}"
-echo "Acceptance Func:   ${ACCEPTANCE_FUNCTION}"
+echo "Method(s):         ${METHOD}"
+echo "Evaluation Func(s):${EVAL_FUNCTIONS}"
 echo "Iterations:        ${NUM_ITER}"
 echo "Parallel Jobs:     ${NUM_PARALLEL}"
 echo "Seed:              ${SEED}"

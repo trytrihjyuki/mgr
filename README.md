@@ -97,6 +97,27 @@ This runs a comprehensive benchmark, comparing all available pricing methods in 
   --num-parallel 16
 ```
 
+### Example 5: Comprehensive "Kitchen Sink" Run
+
+This example shows all available arguments in use. It runs a highly specific, multi-day experiment designed for a very particular research question.
+
+```bash
+# A highly customized, multi-day run on a powerful instance
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-11-01 \
+  --end-date 2019-11-05 \
+  --start-hour 8 \
+  --end-hour 22 \
+  --borough "Brooklyn" \
+  --vehicle-type "fhv" \
+  --method "LinUCB,LP" \
+  --eval "Sigmoid" \
+  --num-iter 5000 \
+  --num-parallel 32 \
+  --ec2-type "extra-large" \
+  --seed 999
+```
+
 After the container exits, the instance will shut itself down. Remember to **terminate** it in the EC2 console to stop billing.
 
 ---
