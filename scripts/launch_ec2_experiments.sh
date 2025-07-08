@@ -56,18 +56,6 @@ EC2_TYPE="small"
 SEED=42
 
 ########################################
-# EC2 Instance Type Proposals
-########################################
-declare -A EC2_INSTANCE_TYPES
-EC2_INSTANCE_TYPES=(
-    ["small"]="t3.large"
-    ["medium"]="m5.2xlarge"
-    ["large"]="r5dn.8xlarge"
-    ["xlarge"]="d2.8xlarge"
-    ["extra-large"]="u-6tb1.112xlarge"
-)
-
-########################################
 # Argument Parsing
 ########################################
 
@@ -110,11 +98,30 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-INSTANCE_TYPE=${EC2_INSTANCE_TYPES[$EC2_TYPE]}
-if [ -z "$INSTANCE_TYPE" ]; then
-    echo "Error: Invalid EC2 type '$EC2_TYPE'. Please use one of: ${!EC2_INSTANCE_TYPES[*]}"
-    exit 1
-fi
+########################################
+# EC2 Instance Type Mapping
+########################################
+case "$EC2_TYPE" in
+    small)
+        INSTANCE_TYPE="t3.large"
+        ;;
+    medium)
+        INSTANCE_TYPE="m5.2xlarge"
+        ;;
+    large)
+        INSTANCE_TYPE="r5dn.8xlarge"
+        ;;
+    xlarge)
+        INSTANCE_TYPE="d2.8xlarge"
+        ;;
+    extra-large)
+        INSTANCE_TYPE="u-6tb1.112xlarge"
+        ;;
+    *)
+        echo "Error: Invalid EC2 type '$EC2_TYPE'. Please use one of: small, medium, large, xlarge, extra-large"
+        exit 1
+        ;;
+esac
 
 ########################################
 # Derived variables (do not modify)

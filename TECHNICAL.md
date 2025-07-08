@@ -118,7 +118,7 @@ The `launch_ec2_experiments.sh` script is highly flexible. Here are some example
 Before running the launcher script, you need to provide your AWS infrastructure details. The recommended method is to create a `.env` file in the root of the project.
 
 1.  **Create the `.env` file:** Copy the provided template.
-    ```bash
+```bash
     cp .env.example .env
     ```
 2.  **Edit `.env`:** Open the `.env` file and fill in the values for your AWS environment. The launch script will automatically source this file.
