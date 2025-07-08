@@ -117,13 +117,33 @@ The `launch_ec2_experiments.sh` script is highly flexible. Here are some example
 
 Before running the launcher script, you need to configure the AWS infrastructure parameters at the top of `scripts/launch_ec2_experiments.sh` and `aws_ec2_launcher.py`.
 
+Here are some one-liner commands to help you find these values. It's recommended to use resources specifically created for this project, which may be tagged with a name like `pricing-experiment`.
+
 - **`REGION`**: The AWS region where the resources will be created.
-- **`SUBNET_ID`**: The ID of the subnet for the EC2 instance. This subnet must have internet access to pull the Docker image.
-- **`SECURITY_GROUP_IDS`**: Security group(s) for the instance. Must allow outbound HTTPS traffic (for ECR and S3) and inbound SSH if you need to debug.
-- **`KEY_NAME`**: The name of an EC2 key pair to associate with the instance for SSH access.
+
+- **`SUBNET_ID`**: Find subnets in your default VPC. This subnet must have internet access to pull the Docker image.
+  ```sh
+  aws ec2 describe-subnets --filters "Name=vpc-id,Values=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)" --query "Subnets[].SubnetId" --output text
+  ```
+
+- **`SECURITY_GROUP_IDS`**: Find security groups, preferably one named `default` or `pricing-experiment`. Must allow outbound HTTPS traffic (for ECR and S3) and inbound SSH if you need to debug.
+  ```sh
+  aws ec2 describe-security-groups --query "SecurityGroups[?GroupName=='default' || contains(GroupName, 'pricing')].GroupId" --output text
+  ```
+
+- **`KEY_NAME`**: List your available EC2 key pairs.
+  ```sh
+  aws ec2 describe-key-pairs --query "KeyPairs[].KeyName" --output text
+  ```
+  
 - **`IAM_INSTANCE_PROFILE`**: The name of the IAM instance profile for the EC2 instance. It needs permissions for:
   - **ECR**: `ecr:GetAuthorizationToken`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`.
   - **S3**: `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on the relevant buckets and prefixes.
+  
+  To find a suitable profile, run:
+  ```sh
+  aws iam list-instance-profiles --query "InstanceProfiles[?contains(InstanceProfileName, 'Pricing')].InstanceProfileName" --output text
+  ```
 
 ## 4. Monitoring & Debugging
 

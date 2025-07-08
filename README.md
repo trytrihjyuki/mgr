@@ -9,6 +9,25 @@ The primary way to run experiments is through the `scripts/launch_ec2_experiment
 
 **Note:** You will need to configure your AWS credentials and some basic infrastructure parameters (like `SUBNET_ID`, `KEY_NAME`, etc.) at the top of the script before the first run.
 
+Here are some one-liner commands to help you find these values. It's recommended to use resources specifically created for this project, which may be tagged with a name like `pricing-experiment`.
+
+- **`SUBNET_ID`**: Find subnets in your default VPC.
+  ```sh
+  aws ec2 describe-subnets --filters "Name=vpc-id,Values=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)" --query "Subnets[].SubnetId" --output text
+  ```
+- **`SECURITY_GROUP_IDS`**: Find security groups, preferably one named `default` or `pricing-experiment`.
+  ```sh
+  aws ec2 describe-security-groups --query "SecurityGroups[?GroupName=='default' || contains(GroupName, 'pricing')].GroupId" --output text
+  ```
+- **`KEY_NAME`**: List your available EC2 key pairs.
+  ```sh
+  aws ec2 describe-key-pairs --query "KeyPairs[].KeyName" --output text
+  ```
+- **`IAM_INSTANCE_PROFILE`**: Find instance profiles with "Pricing" in their name.
+  ```sh
+  aws iam list-instance-profiles --query "InstanceProfiles[?contains(InstanceProfileName, 'Pricing')].InstanceProfileName" --output text
+  ```
+
 ### Example 1: Basic Sanity Check
 
 This command launches a small EC2 instance to run the LinUCB method for a single day on a small sample of green taxi data.
