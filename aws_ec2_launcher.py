@@ -80,22 +80,43 @@ def build_and_push_image(repo_name: str, tag: str, dockerfile: str, region: str)
 
 def generate_user_data(image_uri: str, region: str, container_args: str = "") -> str:
     """Return base64-encoded user-data that pulls the image and runs the container."""
+    
+    repo_name = image_uri.split('/')[-1].split(':')[0]
+    log_group = f"/aws/docker/{repo_name}"
 
     bash_script = textwrap.dedent(
         f"""#!/bin/bash
         set -euxo pipefail
+        
+        # --- Configure CloudWatch Logs for Docker ---
+        # Create daemon.json if it doesn't exist
+        touch /etc/docker/daemon.json
+        
+        # Write configuration to daemon.json
+        cat <<EOF > /etc/docker/daemon.json
+{{
+    "log-driver": "awslogs",
+    "log-opts": {{
+        "awslogs-region": "{region}",
+        "awslogs-group": "{log_group}",
+        "awslogs-create-group": "true"
+    }}
+}}
+EOF
+
+        # --- Install and Start Docker ---
         yum update -y
         amazon-linux-extras install docker -y || yum install docker -y
         service docker start
 
-        # ECR login
+        # --- ECR Login, Pull & Run Container ---
         aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {image_uri.split('/')[0]}
 
-        # Pull & run container
         docker pull {image_uri}
         CPUs=$(nproc)
         docker run --rm --cpus=$CPUs {image_uri} {container_args}
 
+        # --- Shutdown ---
         shutdown -h now
         """
     )

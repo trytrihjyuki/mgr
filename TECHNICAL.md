@@ -113,6 +113,20 @@ The `launch_ec2_experiments.sh` script is highly flexible. Here are some example
   --num-parallel 16
 ```
 
+### Scenario 5: Comprehensive Method Benchmark
+
+**Goal:** Run all available pricing methods simultaneously to generate a complete head-to-head comparison.
+**Configuration:** This requires passing a comma-separated list of methods to the `--method` argument. This type of run is computationally intensive and should be executed on a powerful instance.
+
+```bash
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-10-20 \
+  --end-date 2019-10-20 \
+  --method "LP,MinMaxCostFlow,LinUCB,MAPS" \
+  --ec2-type xlarge \
+  --num-parallel 16
+```
+
 ## 3. Infrastructure Configuration
 
 Before running the launcher script, you need to provide your AWS infrastructure details. The recommended method is to create a `.env` file in the root of the project.

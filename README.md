@@ -83,6 +83,20 @@ This example demonstrates how to run a Monte Carlo simulation with a specific nu
   --ec2-type large
 ```
 
+### Example 4: All-Method Comparison
+
+This runs a comprehensive benchmark, comparing all available pricing methods in a single run. This is ideal for understanding the relative performance of each algorithm under the same conditions.
+
+```bash
+# Run all methods on a large instance
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-10-10 \
+  --end-date 2019-10-10 \
+  --method "LP,MinMaxCostFlow,LinUCB,MAPS" \
+  --ec2-type xlarge \
+  --num-parallel 16
+```
+
 After the container exits, the instance will shut itself down. Remember to **terminate** it in the EC2 console to stop billing.
 
 ---
