@@ -215,10 +215,11 @@ def main():
     parser.add_argument("--num_eval", type=int, default=1000)
     parser.add_argument("--parallel", type=int, default=cpu_count(), help="Number of parallel processes to use.")
     parser.add_argument("--skip_training", action="store_true")
+    parser.add_argument("--experiment-id", type=str, help="A unique ID for the experiment run.")
     
     args = parser.parse_args()
 
-    training_id = "ec2_experiment_" + datetime.now().strftime('%Y%m%d_%H%M%S')
+    training_id = args.experiment_id or "ec2_experiment_" + datetime.now().strftime('%Y%m%d_%H%M%S')
     
     scenarios = create_scenario_parameters(args, training_id)
     
@@ -229,12 +230,32 @@ def main():
     logging.info(f"Generated {len(scenarios)} scenarios to run.")
     
     start_time = time.time()
-
-    with Pool(processes=args.parallel) as pool:
-        results = pool.map(run_scenario, scenarios)
     
+    # --- Progress Reporting Setup ---
+    total_scenarios = len(scenarios)
+    processed_scenarios = 0
+    runner = PricingExperimentRunner()
+    # Write initial progress file
+    runner.save_progress_to_s3(training_id, 0, total_scenarios)
+    last_progress_update = time.time()
+    
+    results = []
+    with Pool(processes=args.parallel) as pool:
+        # Use imap_unordered to get results as they complete
+        for result in pool.imap_unordered(run_scenario, scenarios):
+            results.append(result)
+            processed_scenarios += 1
+            
+            # Update progress file periodically (e.g., every 5 seconds) to avoid too many S3 writes
+            if time.time() - last_progress_update > 5:
+                logging.info(f"Progress: {processed_scenarios}/{total_scenarios} scenarios completed.")
+                runner.save_progress_to_s3(training_id, processed_scenarios, total_scenarios)
+                last_progress_update = time.time()
+
     end_time = time.time()
     
+    # Final progress update
+    runner.save_progress_to_s3(training_id, processed_scenarios, total_scenarios)
     logging.info(f"Finished processing {len(results)} scenarios in {end_time - start_time:.2f} seconds.")
     
     # Process results
@@ -247,30 +268,18 @@ def main():
     if error_count == 0 and success_count > 0:
         try:
             s3_client = boto3.client('s3')
-            # Get the bucket and a representative key from the first result
-            first_s3_location = results[0]['s3_location']
             bucket_name = os.environ.get('S3_BUCKET', 'magisterka')
             
-            # The s3_location is the path to a specific scenario's results.
-            # We want to place the _SUCCESS file at the root of the experiment run.
-            # The experiment run is identified by the training_id.
-            # Let's construct the path based on the structure defined in pricing_logic.py
-            # f"experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}/{directory_name}"
-            # A simpler approach is to find the common prefix of all s3_locations.
+            # The _SUCCESS file is placed at the root of the experiment directory
+            success_key = f"experiments/{training_id}/_SUCCESS"
             
-            s3_locations = [r['s3_location'] for r in results if 's3_location' in r]
-            if s3_locations:
-                # The common path is the parent of the parent of the individual scenario result directories
-                common_path = os.path.dirname(os.path.dirname(s3_locations[0]))
-                success_key = f"{common_path}/_SUCCESS"
-                
-                s3_client.put_object(
-                    Bucket=bucket_name,
-                    Key=success_key,
-                    Body=b'',
-                    ContentType='application/text'
-                )
-                logging.info(f"✅ Successfully created global _SUCCESS file at s3://{bucket_name}/{success_key}")
+            s3_client.put_object(
+                Bucket=bucket_name,
+                Key=success_key,
+                Body=b'',
+                ContentType='application/text'
+            )
+            logging.info(f"✅ Successfully created global _SUCCESS file at s3://{bucket_name}/{success_key}")
 
         except Exception as e:
             logging.error(f"❌ Failed to create global _SUCCESS file: {e}")

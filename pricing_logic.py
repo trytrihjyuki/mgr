@@ -1384,6 +1384,16 @@ class PricingExperimentRunner:
             import pandas as pd
             
             # Extract event parameters
+            training_id = event.get('training_id', 'unknown') # This is now the unique experiment_id
+            scenario_id = event.get('scenario_id', 'unknown_scenario')
+            
+            # Build base S3 path using the unique experiment ID
+            base_path = f"experiments/{training_id}/scenarios/{scenario_id}"
+            
+            # Create timestamp for execution
+            execution_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # Keep other metadata extraction for the summary file
             vehicle_type = event.get('vehicle_type', 'green')
             acceptance_function = event.get('acceptance_function', 'PL')
             year = event.get('year', 2019)
@@ -1392,19 +1402,6 @@ class PricingExperimentRunner:
             borough = event.get('borough', 'Manhattan')
             scenario_index = event.get('scenario_index', 0)
             time_window = event.get('time_window', {})
-            training_id = event.get('training_id', 'unknown')
-            
-            # Generate random 5-digit experiment ID
-            experiment_id = f"{random.randint(10000, 99999)}"
-            
-            # Create timestamp for execution
-            execution_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            
-            # Create directory name: {experiment_id}_{timestamp}
-            directory_name = f"{experiment_id}_{execution_timestamp}"
-            
-            # Build base S3 path
-            base_path = f"experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}/{directory_name}"
             
             # Calculate time window details
             hour_start = time_window.get('hour_start', 10)
@@ -1433,7 +1430,8 @@ class PricingExperimentRunner:
             # 1. Create experiment_summary.json
             experiment_summary = {
                 'experiment_metadata': {
-                    'experiment_id': experiment_id,
+                    'experiment_id': training_id,
+                    'scenario_id': scenario_id,
                     'execution_timestamp': execution_timestamp,
                     'seed': random.getstate()[1][0] if hasattr(random.getstate()[1], '__getitem__') else None,
                     'vehicle_type': vehicle_type,
@@ -1536,6 +1534,27 @@ class PricingExperimentRunner:
             logger.info(f"✅ Successfully created _SUCCESS file at s3://{self.bucket_name}/{success_key}")
         except Exception as e:
             logger.error(f"❌ Failed to create _SUCCESS file: {e}")
+
+    def save_progress_to_s3(self, experiment_id: str, processed: int, total: int):
+        """Save a _PROGRESS file to S3 with the current experiment status."""
+        try:
+            progress_key = f"experiments/{experiment_id}/_PROGRESS"
+            progress_data = {
+                "processed_scenarios": processed,
+                "total_scenarios": total,
+                "progress_percentage": round((processed / total) * 100, 2) if total > 0 else 0,
+                "last_update_utc": datetime.utcnow().isoformat()
+            }
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=progress_key,
+                Body=json.dumps(progress_data, indent=2),
+                ContentType='application/json'
+            )
+        except Exception as e:
+            # This is a non-critical error, so just log it and don't raise
+            logger.warning(f"⚠️ Could not write progress file to S3: {e}")
+
 
     def calculate_matching_success_stats(self, results: List[Dict[str, Any]], data_stats: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate matching success statistics for summary."""

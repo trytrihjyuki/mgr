@@ -129,6 +129,8 @@ esac
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO_NAME}:${TAG}"
+EXPERIMENT_ID="exp_$(date +%Y%m%d_%H%M%S)_${RANDOM}"
+
 
 ########################################
 # Helper functions
@@ -136,18 +138,12 @@ IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO_NAME}:${TAG}"
 
 function build_image_once() {
   echo "[+] Building & pushing image to ECR (${IMAGE_URI})"
-  # This first call is a dry-run to ensure docker login and ECR repo existence
   python3 aws_ec2_launcher.py \
-    --repo-name "${REPO_NAME}" --tag "${TAG}" --dockerfile "${DOCKERFILE}" \
-    --region "${REGION}" $( [[ -n "${AMI_ID}" ]] && echo "--ami-id ${AMI_ID}" ) \
-    --subnet-id "${SUBNET_ID}" --security-group-ids "${SECURITY_GROUP_IDS[@]}" \
-    --key-name "${KEY_NAME}" --iam-instance-profile "${IAM_INSTANCE_PROFILE}" \
-    --container-args "--help" # Pass dummy arg
-
-  # Build + push (once)
-  python3 aws_ec2_launcher.py \
-    --repo-name "${REPO_NAME}" --tag "${TAG}" --dockerfile "${DOCKERFILE}" \
-    --region "${REGION}"
+    --repo-name "${REPO_NAME}" \
+    --tag "${TAG}" \
+    --dockerfile "${DOCKERFILE}" \
+    --region "${REGION}" \
+    --build-only
 }
 
 function launch_job() {
@@ -163,26 +159,12 @@ function launch_job() {
     --container-args "${CONTAINER_ARGS}"
 }
 
-function construct_success_file_path() {
-    local s_date=$1
-    local v_type=$2
-    local acc_func=$3
-    local boro=$4
-
-    local year=$(date -j -f "%Y-%m-%d" "$s_date" "+%Y")
-    local month=$(date -j -f "%Y-%m-%d" "$s_date" "+%m")
-    
-    # This path needs to match the logic in run_pricing_experiment.py
-    # experiments/type={vehicle_type}/eval={acceptance_function}/borough={borough}/year={year}/month={month:02d}/day={day:02d}
-    # The _SUCCESS file is in the parent of the parent of the result dir.
-    # So we go up to the month level.
-    echo "experiments/type=${v_type}/eval=${acc_func}/borough=${boro}/year=${year}/month=${month}/_SUCCESS"
-}
-
 function monitor_experiment() {
     local instance_id=$1
-    local success_s3_key=$2
-    local bucket_name="${S3_BUCKET_NAME}" # Use the configured bucket name
+    local experiment_id=$2
+    local bucket_name="${S3_BUCKET_NAME}"
+    local success_s3_key="experiments/${experiment_id}/_SUCCESS"
+    local progress_s3_key="experiments/${experiment_id}/_PROGRESS"
     local timeout_seconds=10800 # 3 hours
     local check_interval_seconds=60
 
@@ -214,7 +196,19 @@ function monitor_experiment() {
             return 1
         fi
         
-        echo "   (Elapsed: ${elapsed_time}s) Instance status: ${instance_status:-running}. _SUCCESS file not found. Checking again in ${check_interval_seconds}s..."
+        # Check for _PROGRESS file
+        local progress_info="--"
+        local progress_json=$(aws s3api get-object --bucket "${bucket_name}" --key "${progress_s3_key}" /dev/null 2>/dev/null || echo "{}")
+        if [[ -n "$progress_json" && "$progress_json" != "{}" ]]; then
+            local processed=$(echo "$progress_json" | grep "processed_scenarios" | sed 's/[^0-9]*//g')
+            local total=$(echo "$progress_json" | grep "total_scenarios" | sed 's/[^0-9]*//g')
+            local percent=$(echo "$progress_json" | grep "progress_percentage" | sed 's/[^0-9.]*//g')
+            if [[ -n "$processed" && -n "$total" ]]; then
+                progress_info="Progress: ${processed}/${total} (${percent}%)"
+            fi
+        fi
+
+        echo "   (Elapsed: ${elapsed_time}s) ${progress_info}. Instance status: ${instance_status:-running}. Checking again in ${check_interval_seconds}s..."
         sleep "${check_interval_seconds}"
     done
 }
@@ -229,10 +223,12 @@ CONTAINER_ARGS="--start-date ${START_DATE} --end-date ${END_DATE} "
 CONTAINER_ARGS+="--start-hour ${START_HOUR} --end-hour ${END_HOUR} "
 CONTAINER_ARGS+="--borough ${BOROUGH} --vehicle-type ${VEHICLE_TYPE} "
 CONTAINER_ARGS+="--method ${METHOD} --acceptance-function ${ACCEPTANCE_FUNCTION} "
-CONTAINER_ARGS+="--num-iter ${NUM_ITER} --num-parallel ${NUM_PARALLEL} --seed ${SEED}"
+CONTAINER_ARGS+="--num-iter ${NUM_ITER} --num-parallel ${NUM_PARALLEL} --seed ${SEED} "
+CONTAINER_ARGS+="--experiment-id ${EXPERIMENT_ID}"
 
 echo "🚀 Launching experiment with the following configuration:"
 echo "-----------------------------------------------------"
+echo "Experiment ID:     ${EXPERIMENT_ID}"
 echo "EC2 Instance Type: ${EC2_TYPE} (${INSTANCE_TYPE})"
 echo "Start Date:        ${START_DATE}"
 echo "End Date:          ${END_DATE}"
@@ -256,19 +252,29 @@ then
     exit 1
 fi
 
+echo ""
+echo "--- Step 1: Building Docker Image ---"
 build_image_once
+echo "✅ Docker image build complete."
+echo ""
+
+echo "--- Step 2: Launching EC2 Instance ---"
 INSTANCE_ID=$(launch_job "${INSTANCE_TYPE}" "${CONTAINER_ARGS}" | grep "Instance launched:" | awk '{print $3}')
 
 if [ -z "$INSTANCE_ID" ]; then
     echo "❌ Failed to launch EC2 instance. Aborting."
     exit 1
 fi
+echo "✅ EC2 instance ${INSTANCE_ID} launched successfully."
+echo ""
 
-SUCCESS_S3_KEY=$(construct_success_file_path "$START_DATE" "$VEHICLE_TYPE" "$ACCEPTANCE_FUNCTION" "$BOROUGH")
 
-monitor_experiment "$INSTANCE_ID" "$SUCCESS_S3_KEY"
+echo "--- Step 3: Monitoring Experiment ---"
+monitor_experiment "$INSTANCE_ID" "$EXPERIMENT_ID"
 MONITOR_EXIT_CODE=$?
 
+echo ""
+echo "--- Experiment Complete ---"
 if [ $MONITOR_EXIT_CODE -eq 0 ]; then
     echo "🎉 Experiment finished and verified successfully!"
 else

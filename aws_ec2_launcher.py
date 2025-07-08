@@ -170,15 +170,16 @@ def parse_args():
     parser.add_argument("--tag", default="latest", help="Docker tag to use")
     parser.add_argument("--dockerfile", default="Dockerfile.ec2")
     parser.add_argument("--no-build", action="store_true", help="Skip building & pushing the image")
+    parser.add_argument("--build-only", action="store_true", help="Only build & push the image, do not launch an instance")
 
     # EC2 networking & instance
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--ami-id", help="AMI ID to use (will auto-resolve Amazon Linux if omitted)")
     parser.add_argument("--instance-type", default="r5dn.8xlarge")
-    parser.add_argument("--subnet-id", required=True)
-    parser.add_argument("--security-group-ids", required=True, nargs="+")
-    parser.add_argument("--key-name", required=True)
-    parser.add_argument("--iam-instance-profile", required=True, help="Instance profile name with ECR + S3 permissions")
+    parser.add_argument("--subnet-id", help="Subnet ID to launch the instance in")
+    parser.add_argument("--security-group-ids", nargs="+", help="One or more security group IDs")
+    parser.add_argument("--key-name", help="Name of the EC2 key pair to use")
+    parser.add_argument("--iam-instance-profile", help="Instance profile name with ECR + S3 permissions")
 
     # Experiment parameters
     parser.add_argument("--container-args", default="--day 15 --hour_start 10 --hour_end 11 --time_interval 5 --parallel 2",
@@ -197,6 +198,24 @@ def main():
         account_id = boto3.client("sts").get_caller_identity()["Account"]
         image_uri = f"{account_id}.dkr.ecr.{args.region}.amazonaws.com/{args.repo_name}:{args.tag}"
         print(f"⚠️ Skipping build, will use existing image {image_uri}")
+
+    if args.build_only:
+        print("✅ Build only mode. Exiting without launching instance.")
+        return
+
+    # --- Validate arguments for instance launch ---
+    required_for_launch = {
+        "subnet-id": args.subnet_id,
+        "security-group-ids": args.security_group_ids,
+        "key-name": args.key_name,
+        "iam-instance-profile": args.iam_instance_profile,
+    }
+    missing_args = [f"--{arg}" for arg, value in required_for_launch.items() if not value]
+
+    if missing_args:
+        print(f"❌ Error: The following arguments are required to launch an instance: {', '.join(missing_args)}")
+        sys.exit(1)
+
 
     ami_id = args.ami_id
     if ami_id and ami_id.startswith("ami-0abcdef"):
