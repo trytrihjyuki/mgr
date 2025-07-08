@@ -1,58 +1,60 @@
 # Ride-Hailing Pricing Experiment Framework
 
-Cloud-based system for running pricing experiments on NYC taxi data using Hikima methodology. Supports multiple pricing algorithms (LP, MinMaxCostFlow, LinUCB, MAPS) with configurable time windows and acceptance functions.
+> **2024-07 Update** – The project has been streamlined to use a flexible EC2-based architecture.  
+> The `scripts/launch_ec2_experiments.sh` script is the main entry point for running experiments.
 
-## Quick Start
+## 🚀 Quick Start
 
-### 1. Data Check
+The primary way to run experiments is through the `scripts/launch_ec2_experiments.sh` script. It provides a wide range of options to configure your experiment and launches the necessary cloud infrastructure.
+
+**Note:** You will need to configure your AWS credentials and some basic infrastructure parameters (like `SUBNET_ID`, `KEY_NAME`, etc.) at the top of the script before the first run.
+
+### Example 1: Basic Sanity Check
+
+This command launches a small EC2 instance to run the LinUCB method for a single day on a small sample of green taxi data.
+
 ```bash
-# Check if data exists for specific month
-aws s3 ls s3://magisterka/datasets/yellow/year=2019/month=10/
-
-# Verify LinUCB models are available
-aws s3 ls s3://magisterka/models/linucb/yellow_Manhattan_201907/
+# Launch a small, one-day experiment
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-10-06 \
+  --end-date 2019-10-06 \
+  --ec2-type small
 ```
 
-### 2. Single Day Experiment
-```bash
-# Standard Hikima experiment (120 scenarios: 10:00-20:00, 5min intervals)
-python run_pricing_experiment.py \
-  --year=2019 --month=10 --day=6 \
-  --borough=Manhattan --vehicle_type=yellow \
-  --eval=PL,Sigmoid --methods=LP,MinMaxCostFlow,LinUCB,MAPS \
-  --parallel=3 --skip_training
+### Example 2: Comprehensive Weekly Experiment
 
-# Custom time window (48 scenarios: 8:00-20:00, 15min intervals)  
-python run_pricing_experiment.py \
-  --year=2019 --month=10 --day=1 \
-  --borough=Manhattan --vehicle_type=green \
-  --eval=PL --methods=LP \
-  --hour_start=8 --hour_end=20 --time_interval=15 --time_unit=m \
-  --parallel=2 --skip_training
+This command runs a larger experiment over a week, using a more powerful EC2 instance. It tests the Linear Programming method on yellow taxi data in Manhattan.
+
+```bash
+# Launch a week-long experiment on a medium instance
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-10-01 \
+  --end-date 2019-10-07 \
+  --method LP \
+  --vehicle-type yellow \
+  --borough Manhattan \
+  --ec2-type medium
 ```
 
-### 3. Multi-Day Parallel Execution
-```bash
-# Enhanced parallel execution for entire month
-./enhanced_parallel_experiments.sh
+### Example 3: Multi-Iteration Monte Carlo
 
-# This runs:
-# - 2 parallel processes handling different days (reduced from 3 due to AWS limits)
-# - Smart progress monitoring with 20-minute timeout
-# - Daily S3 saves with automatic resume capability
-# - Circuit breaker to prevent spam on broken lambdas
-# - Full experiment tracking and recovery
+This example demonstrates how to run a Monte Carlo simulation with a specific number of iterations and a custom seed.
+
+```bash
+# Run a Monte Carlo simulation with 5000 iterations
+./scripts/launch_ec2_experiments.sh \
+  --start-date 2019-10-15 \
+  --end-date 2019-10-15 \
+  --num-iter 5000 \
+  --seed 123 \
+  --ec2-type large
 ```
+
+After the container exits, the instance will shut itself down. Remember to **terminate** it in the EC2 console to stop billing.
+
+---
 
 ## Core Features
-
-### **Enhanced Parallel Execution**
-- **Multi-Process**: 2 parallel processes handling different days (AWS limit: 700 concurrent Lambdas)
-- **Smart Timeout**: Only kills processes with no progress for 20+ minutes
-- **Daily Saves**: Automatic S3 upload after each day completes
-- **Circuit Breaker**: Prevents spam on broken lambdas (5 failures = halt)
-- **Progress Tracking**: Real-time monitoring of batch progress
-- **Recovery**: Automatic resume from interruptions
 
 ### **Pricing Algorithms**
 - **LP**: Gupta-Nagarajan Linear Program optimization
@@ -73,77 +75,39 @@ python run_pricing_experiment.py \
 - **Manhattan**: Highest density, uses 30s time intervals in Hikima
 - **Bronx/Queens/Brooklyn**: Lower density, uses 300s time intervals in Hikima
 
-## Configuration Options
+## Script Arguments
 
-### **Day Selection**
-```bash
-# Single day
---day=6
+The `scripts/launch_ec2_experiments.sh` script accepts the following arguments:
 
-# Multiple specific days
---days=1,6,11,16,21,26,31
-
-# Day range
---start_day=1 --end_day=7
-
-# Modulo pattern (every 5th day starting from day 1)
---days_modulo=5,1 --total_days=31
-```
-
-### **Time Window Configuration**
-
-#### **Standard Hikima**
-```bash
---hour_start=10 --hour_end=20 --time_interval=5 --time_unit=m
-# Result: 120 scenarios (10 hours × 12 intervals/hour)
-```
-
-#### **High-Frequency Analysis**
-```bash
---hour_start=14 --hour_end=16 --time_interval=30 --time_unit=s  
-# Result: 240 scenarios (2 hours × 120 intervals/hour)
-```
-
-#### **Custom Research**
-```bash
---hour_start=8 --hour_end=22 --time_interval=15 --time_unit=m
-# Result: 56 scenarios (14 hours × 4 intervals/hour)
-```
+| Argument                | Description                                                 | Default      |
+|-------------------------|-------------------------------------------------------------|--------------|
+| `--start-date`          | Start date for the experiment (YYYY-MM-DD)                  | Yesterday    |
+| `--end-date`            | End date for the experiment (YYYY-MM-DD)                    | Today        |
+| `--start-hour`          | Start hour (0-23)                                           | 0            |
+| `--end-hour`            | End hour (0-23)                                             | 23           |
+| `--borough`             | NYC Borough                                                 | Manhattan    |
+| `--vehicle-type`        | Taxi type: `green`, `yellow`, `fhv`                           | `green`      |
+| `--method`              | Pricing method: `LinUCB`, `LP`, etc.                          | `LinUCB`     |
+| `--acceptance-function` | Acceptance function: `PL`, `Sigmoid`                        | `PL`         |
+| `--num-iter`            | Number of Monte Carlo iterations                            | 1000         |
+| `--num-parallel`        | Number of parallel jobs within the container                | 4            |
+| `--ec2-type`            | `small`, `medium`, `large`, `xlarge`, `extra-large`           | `small`      |
+| `--seed`                | Random seed                                                 | 42           |
 
 ## Results Structure
 
-Results are saved to S3 with day-level aggregation:
+Results are saved to S3 with a structured path:
 ```
 s3://magisterka/experiments/
   type={vehicle_type}/
-    eval={acceptance_function}/
-      borough={borough}/
-        year={year}/month={month}/day={day}/
-          {execution_date}_{training_id}.json
+    year={year}/month={month}/day={day}/
+      {training_id}.json
 ```
 
-Each file contains:
-- **scenarios**: Individual scenario results with time windows
-- **day_statistics**: Aggregated statistics across all scenarios  
-- **method_performance_summary**: Algorithm performance metrics
-
-## Performance
-
-- **Cloud Execution**: AWS Lambda with 10GB RAM, 8+ virtual cores
-- **Parallel Processing**: Up to 50 concurrent Lambda executions
-- **Speed**: 1-7 scenarios/second depending on algorithm complexity
-- **Cost**: ~$0.01-0.05 per day experiment
-- **Reliability**: Smart timeout and circuit breaker prevent hanging
-
-## Monitoring
-
-The enhanced parallel execution provides comprehensive monitoring:
-- **Real-time Progress**: Batch completion tracking
-- **Health Checks**: Memory, disk, and process monitoring
-- **Timeout Management**: Progress-based timeout (not time-based)
-- **Error Classification**: Rate limit detection and handling
-- **Recovery**: Automatic resume from last completed day
+Each file contains detailed results from the experiment run, including performance metrics for each pricing method and scenario.
 
 ## See Also
 
-- **TECHNICAL.md**: Detailed setup, validation, and troubleshooting guide 
+- **TECHNICAL.md**: Detailed setup, validation, and troubleshooting guide.
+- **`run_pricing_experiment.py`**: The core Python script that runs inside the Docker container.
+- **`aws_ec2_launcher.py`**: The Python script responsible for the cloud infrastructure automation. 

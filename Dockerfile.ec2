@@ -1,0 +1,29 @@
+# Use a standard Python runtime as a parent image
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the requirements file and install dependencies
+COPY requirements_aws.txt .
+RUN pip install --no-cache-dir -r requirements_aws.txt
+
+# Copy the rest of the application code
+COPY . .
+
+# Make the script executable
+RUN chmod +x run_pricing_experiment.py
+
+# Entrypoint to run the experiment script
+ENTRYPOINT ["./run_pricing_experiment.py"] 
