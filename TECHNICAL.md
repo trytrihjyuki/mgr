@@ -115,9 +115,15 @@ The `launch_ec2_experiments.sh` script is highly flexible. Here are some example
 
 ## 3. Infrastructure Configuration
 
-Before running the launcher script, you need to configure the AWS infrastructure parameters at the top of `scripts/launch_ec2_experiments.sh` and `aws_ec2_launcher.py`.
+Before running the launcher script, you need to provide your AWS infrastructure details. The recommended method is to create a `.env` file in the root of the project.
 
-Here are some one-liner commands to help you find these values. It's recommended to use resources specifically created for this project, which may be tagged with a name like `pricing-experiment`.
+1.  **Create the `.env` file:** Copy the provided template.
+    ```bash
+    cp .env.example .env
+    ```
+2.  **Edit `.env`:** Open the `.env` file and fill in the values for your AWS environment. The launch script will automatically source this file.
+
+Here are some one-liner commands to help you find these values.
 
 - **`REGION`**: The AWS region where the resources will be created.
 
@@ -136,14 +142,18 @@ Here are some one-liner commands to help you find these values. It's recommended
   aws ec2 describe-key-pairs --query "KeyPairs[].KeyName" --output text
   ```
   
-- **`IAM_INSTANCE_PROFILE`**: The name of the IAM instance profile for the EC2 instance. It needs permissions for:
-  - **ECR**: `ecr:GetAuthorizationToken`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`.
-  - **S3**: `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on the relevant buckets and prefixes.
+- **`IAM_INSTANCE_PROFILE`**: The name of the IAM instance profile for the EC2 instance. It needs permissions for ECR and S3.
   
   To find a suitable profile, run:
   ```sh
   aws iam list-instance-profiles --query "InstanceProfiles[?contains(InstanceProfileName, 'Pricing')].InstanceProfileName" --output text
   ```
+
+> **Handling Multiple Resource IDs:** The CLI commands provided are for guidance. If they return multiple, untagged resources, it can be difficult to identify the correct one. In this situation, the most reliable approach is to:
+> 1.  Log in to the **AWS Management Console**.
+> 2.  Navigate to the specific service (e.g., VPC, EC2 Security Groups).
+> 3.  Manually identify the correct resource and copy its ID.
+> 4.  **Best Practice:** Apply a consistent `Name` tag to all resources related to this project (e.g., `pricing-experiment-vpc`, `pricing-experiment-sg`) to make them easily discoverable via the CLI in the future.
 
 ## 4. Monitoring & Debugging
 

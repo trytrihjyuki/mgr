@@ -16,6 +16,15 @@
 
 set -euo pipefail
 
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "🔑 Sourcing configuration from .env file..."
+    # Export the variables to make them available to sub-processes
+    set -a
+    source .env
+    set +a
+fi
+
 ########################################
 # User-tunable defaults
 ########################################
@@ -23,9 +32,10 @@ set -euo pipefail
 REGION="${AWS_REGION:-us-east-1}"
 AMI_ID="${AMI_ID:-}"  # leave empty to auto-resolve via SSM
 SUBNET_ID="${SUBNET_ID:-subnet-0123456789abcdef0}"
-SECURITY_GROUP_IDS=("${SECURITY_GROUP_IDS_OVERRIDE:-sg-0123456789abcdef0}")
+SECURITY_GROUP_IDS=("${SECURITY_GROUP_IDS_OVERRIDE:-${SECURITY_GROUP_IDS:-sg-0123456789abcdef0}}")
 KEY_NAME="${KEY_NAME:-myKeyPair}"
 IAM_INSTANCE_PROFILE="${IAM_INSTANCE_PROFILE:-PricingExperimentRole}"
+S3_BUCKET_NAME="${S3_BUCKET:-magisterka}"
 
 REPO_NAME="pricing-experiments"
 TAG="latest"
@@ -165,7 +175,7 @@ function construct_success_file_path() {
 function monitor_experiment() {
     local instance_id=$1
     local success_s3_key=$2
-    local bucket_name="magisterka" # Or get from env var
+    local bucket_name="${S3_BUCKET_NAME}" # Use the configured bucket name
     local timeout_seconds=10800 # 3 hours
     local check_interval_seconds=60
 

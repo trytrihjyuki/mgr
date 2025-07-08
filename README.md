@@ -7,9 +7,17 @@
 
 The primary way to run experiments is through the `scripts/launch_ec2_experiments.sh` script. It provides a wide range of options to configure your experiment and launches the necessary cloud infrastructure.
 
-**Note:** You will need to configure your AWS credentials and some basic infrastructure parameters (like `SUBNET_ID`, `KEY_NAME`, etc.) at the top of the script before the first run.
+### 1. Configuration
 
-Here are some one-liner commands to help you find these values. It's recommended to use resources specifically created for this project, which may be tagged with a name like `pricing-experiment`.
+Before the first run, you need to provide your AWS infrastructure details. The recommended way is to use a `.env` file.
+
+1.  **Create the `.env` file:** Copy the provided template to a new `.env` file:
+    ```bash
+    cp .env.example .env
+    ```
+2.  **Edit `.env`:** Open the `.env` file and fill in the values for your AWS environment.
+
+You can use the following one-liner commands to help you find these values.
 
 - **`SUBNET_ID`**: Find subnets in your default VPC.
   ```sh
@@ -27,6 +35,12 @@ Here are some one-liner commands to help you find these values. It's recommended
   ```sh
   aws iam list-instance-profiles --query "InstanceProfiles[?contains(InstanceProfileName, 'Pricing')].InstanceProfileName" --output text
   ```
+
+> **Note on Multiple Values:** If any of these commands return multiple IDs and you are unsure which one to use, it is best to log in to the AWS Management Console to visually inspect the resources. Look for resources that are tagged with a name like `pricing-experiment` or are configured for the correct VPC. Adding unique tags to your AWS resources is a good practice to make them easily identifiable.
+
+### 2. Running Experiments
+
+Once your `.env` file is configured, you can run experiments as shown in the examples below.
 
 ### Example 1: Basic Sanity Check
 
