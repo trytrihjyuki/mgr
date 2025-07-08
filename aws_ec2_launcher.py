@@ -15,8 +15,8 @@ from botocore.exceptions import ClientError
 # ---------------------------------------------------------------------------
 
 def run(cmd: List[str], check: bool = True, capture_output: bool = False, **kwargs):
-    """Thin wrapper around subprocess.run that prints the command."""
-    print("🚀", " ".join(cmd))
+    """Thin wrapper around subprocess.run that prints the command to stderr."""
+    print("🚀", " ".join(cmd), file=sys.stderr)
     return subprocess.run(cmd, check=check, capture_output=capture_output, text=True, **kwargs)
 
 
@@ -24,15 +24,15 @@ def ensure_ecr_repository(ecr_client, repo_name: str):
     """Create ECR repository if it does not yet exist."""
     try:
         ecr_client.describe_repositories(repositoryNames=[repo_name])
-        print(f"💿 ECR repo '{repo_name}' already exists")
+        print(f"💿 ECR repo '{repo_name}' already exists", file=sys.stderr)
     except ecr_client.exceptions.RepositoryNotFoundException:
-        print(f"💿 Creating ECR repo '{repo_name}'…")
+        print(f"💿 Creating ECR repo '{repo_name}'…", file=sys.stderr)
         ecr_client.create_repository(repositoryName=repo_name)
 
 
 def docker_login_to_ecr(region: str, account_id: str):
     """Authenticate the local Docker daemon against ECR."""
-    print("🔑 Logging in to ECR…")
+    print("🔑 Logging in to ECR…", file=sys.stderr)
     login_cmd = [
         "aws",
         "ecr",
@@ -65,10 +65,10 @@ def build_and_push_image(repo_name: str, tag: str, dockerfile: str, region: str)
 
     image_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}:{tag}"
 
-    print("🐳 Building image…")
+    print("🐳 Building image…", file=sys.stderr)
     run(["docker", "build", "-f", dockerfile, "-t", image_uri, "."])
 
-    print("📤 Pushing image…")
+    print("📤 Pushing image…", file=sys.stderr)
     run(["docker", "push", image_uri])
 
     return image_uri
@@ -78,53 +78,35 @@ def build_and_push_image(repo_name: str, tag: str, dockerfile: str, region: str)
 # EC2 launching helpers
 # ---------------------------------------------------------------------------
 
-def generate_user_data(image_uri: str, region: str, container_args: str = "") -> str:
-    """Return base64-encoded user-data that pulls the image and runs the container."""
-    
-    repo_name = image_uri.split('/')[-1].split(':')[0]
-    log_group = f"/aws/docker/{repo_name}"
-
+def generate_user_data() -> str:
+    """
+    Return a base64-encoded user-data script that prepares the instance
+    by installing and starting Docker.
+    """
     bash_script = textwrap.dedent(
         f"""#!/bin/bash
+        # Log everything to a file on the instance for debugging
+        exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+        
+        echo "--- User Data Script Start ---"
         set -euxo pipefail
         
-        # --- Configure CloudWatch Logs for Docker ---
-        # Create daemon.json if it doesn't exist
-        touch /etc/docker/daemon.json
-        
-        # Write configuration to daemon.json
-        cat <<EOF > /etc/docker/daemon.json
-{{
-    "log-driver": "awslogs",
-    "log-opts": {{
-        "awslogs-region": "{region}",
-        "awslogs-group": "{log_group}",
-        "awslogs-create-group": "true"
-    }}
-}}
-EOF
-
-        # --- Install and Start Docker ---
+        # --- Install and start Docker ---
+        echo "Updating yum and installing docker..."
         yum update -y
-        amazon-linux-extras install docker -y || yum install docker -y
+        # Use the amazon-linux-extras installer for AL2, fall back to yum for other versions
+        amazon-linux-extras install docker -y || yum install -y docker
+        
+        echo "Starting docker service..."
         service docker start
-
-        # --- ECR Login, Pull & Run Container ---
-        aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {image_uri.split('/')[0]}
-
-        docker pull {image_uri}
-        CPUs=$(nproc)
-        docker run --rm --cpus=$CPUs {image_uri} {container_args}
-
-        # --- Shutdown ---
-        shutdown -h now
+        
+        echo "--- User Data Script End ---"
         """
     )
     return base64.b64encode(bash_script.encode()).decode()
 
 
 def launch_instance(
-    image_uri: str,
     region: str,
     ami_id: str,
     instance_type: str,
@@ -132,14 +114,13 @@ def launch_instance(
     security_group_ids: List[str],
     subnet_id: str,
     iam_instance_profile: str,
-    container_args: str,
+    experiment_id: str,
 ):
-    """Launch an EC2 instance that immediately runs the pricing experiment container."""
+    """Launch a bare EC2 instance ready for SSH commands."""
     ec2 = boto3.client("ec2", region_name=region)
+    user_data_b64 = generate_user_data()
 
-    user_data_b64 = generate_user_data(image_uri, region, container_args)
-
-    print("📦 Launching EC2 instance…")
+    print("📦 Launching EC2 instance…", file=sys.stderr)
     resp = ec2.run_instances(
         ImageId=ami_id,
         InstanceType=instance_type,
@@ -150,16 +131,20 @@ def launch_instance(
         UserData=user_data_b64,
         MinCount=1,
         MaxCount=1,
+        InstanceInitiatedShutdownBehavior='terminate', # Ensure it terminates if shutdown from within
         TagSpecifications=[
             {
                 "ResourceType": "instance",
-                "Tags": [{"Key": "Name", "Value": "pricing-experiment"}],
+                "Tags": [
+                    {"Key": "Name", "Value": f"pricing-experiment-{experiment_id}"},
+                    {"Key": "ExperimentID", "Value": experiment_id},
+                ],
             }
         ],
     )
 
     instance_id = resp["Instances"][0]["InstanceId"]
-    print(f"🆔 Instance launched: {instance_id}")
+    print(f"✅ Instance {instance_id} is being launched.", file=sys.stderr)
     return instance_id
 
 
@@ -203,25 +188,21 @@ def parse_args():
     parser.add_argument("--iam-instance-profile", help="Instance profile name with ECR + S3 permissions")
 
     # Experiment parameters
-    parser.add_argument("--container-args", default="--day 15 --hour_start 10 --hour_end 11 --time_interval 5 --parallel 2",
-                        help="Arguments forwarded to run_pricing_experiment.py inside the container")
-
+    parser.add_argument("--experiment-id", required=True, help="Unique ID for this experiment run")
+    
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    if not args.no_build:
-        image_uri = build_and_push_image(args.repo_name, args.tag, args.dockerfile, args.region)
-    else:
-        # Derive account ID to construct URI
-        account_id = boto3.client("sts").get_caller_identity()["Account"]
-        image_uri = f"{account_id}.dkr.ecr.{args.region}.amazonaws.com/{args.repo_name}:{args.tag}"
-        print(f"⚠️ Skipping build, will use existing image {image_uri}")
+    if not args.build_only and not args.no_build:
+        build_and_push_image(args.repo_name, args.tag, args.dockerfile, args.region)
+    elif args.no_build:
+        print(f"⚠️ Skipping build, will use existing image.", file=sys.stderr)
 
     if args.build_only:
-        print("✅ Build only mode. Exiting without launching instance.")
+        print("✅ Build only mode. Exiting without launching instance.", file=sys.stderr)
         return
 
     # --- Validate arguments for instance launch ---
@@ -234,7 +215,7 @@ def main():
     missing_args = [f"--{arg}" for arg, value in required_for_launch.items() if not value]
 
     if missing_args:
-        print(f"❌ Error: The following arguments are required to launch an instance: {', '.join(missing_args)}")
+        print(f"❌ Error: The following arguments are required to launch an instance: {', '.join(missing_args)}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -244,7 +225,6 @@ def main():
     ami_id = ami_id or resolve_default_ami(args.region)
 
     instance_id = launch_instance(
-        image_uri=image_uri,
         region=args.region,
         ami_id=ami_id,
         instance_type=args.instance_type,
@@ -252,18 +232,22 @@ def main():
         security_group_ids=args.security_group_ids,
         subnet_id=args.subnet_id,
         iam_instance_profile=args.iam_instance_profile,
-        container_args=args.container_args,
+        experiment_id=args.experiment_id,
     )
-
-    print("🎉 All done. Monitor progress via EC2 console or CloudWatch logs. Remember to terminate the instance when finished!")
+    
+    # Print instance ID to stdout for the calling script to capture
+    print(instance_id)
 
 
 if __name__ == "__main__":
     try:
         main()
     except ClientError as ce:
-        print(f"AWS error: {ce}")
+        print(f"AWS error: {ce}", file=sys.stderr)
         sys.exit(1)
     except subprocess.CalledProcessError as cpe:
-        print(f"Subprocess error: {cpe.cmd} exited with {cpe.returncode}")
-        sys.exit(cpe.returncode) 
+        print(f"Subprocess error: {cpe.cmd} exited with {cpe.returncode}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        sys.exit(1) 
