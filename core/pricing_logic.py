@@ -76,7 +76,60 @@ class PricingExperimentRunner:
         self.distance_matrix = None
         
         logger.info("🔧 Initialized PricingExperimentRunner")
-    
+
+    def process_scenario(self, scenario_params: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        """
+        Process a single complete scenario. This includes loading data, running all
+        specified pricing methods, and returning the consolidated results.
+        """
+        start_time = time.time()
+
+        # Extract parameters
+        year = scenario_params['year']
+        month = scenario_params['month']
+        day = scenario_params['day']
+        borough = scenario_params['borough']
+        vehicle_type = scenario_params['vehicle_type']
+        methods = scenario_params['methods']
+        eval_function = scenario_params['eval_function']
+        time_window = scenario_params['time_window']
+
+        # Create datetime objects for the time window
+        time_start = datetime(year, month, day, time_window['hour_start'], time_window['minute_start'])
+        time_end = time_start + timedelta(minutes=5) # Fixed 5-minute interval
+
+        # Load and process data
+        requesters_df, taxis_df = self.load_taxi_data(
+            vehicle_type, year, month, day, borough, time_start, time_end
+        )
+        
+        data_stats = {'num_requesters': len(requesters_df), 'num_taxis': len(taxis_df)}
+
+        if requesters_df.empty or taxis_df.empty:
+            logging.warning(f"No requesters or taxis for scenario {scenario_params['scenario_id']}. Skipping.")
+            return [], data_stats, {'total_runtime': time.time() - start_time}
+        
+        # Calculate distance matrix and edge weights
+        distance_matrix, edge_weights = self.calculate_distance_matrix_and_edge_weights(requesters_df, taxis_df)
+
+        # Run specified methods
+        results = []
+        for method in methods:
+            run_method_func = getattr(self, f"run_{method.lower()}", None)
+            if run_method_func:
+                if method == 'LinUCB':
+                    result = run_method_func(requesters_df, taxis_df, distance_matrix, edge_weights, eval_function, borough, vehicle_type, time_start.hour)
+                else:
+                    result = run_method_func(requesters_df, taxis_df, distance_matrix, edge_weights, eval_function)
+            else:
+                result = {'method_name': method, 'error': f"Unknown method '{method}'"}
+            results.append(result)
+
+        total_runtime = time.time() - start_time
+        performance_summary = {'total_runtime': total_runtime}
+        
+        return results, data_stats, performance_summary
+
     def safe_int_convert(self, value):
         """Safely convert PyArrow Timestamp or other objects to int."""
         try:
@@ -139,39 +192,22 @@ class PricingExperimentRunner:
     
     def load_taxi_data(self, taxi_type: str, year: int, month: int, day: int, 
                       borough: str, time_start: datetime, time_end: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Load SINGLE taxi type data from S3 - SEPARATE experiments per vehicle type (NO combination)."""
+        """Load and process taxi data for a specific time window."""
+        s3_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
         
-        df = None
-        
-        # Load ONLY the specified taxi type (NO combination)
         try:
-            if PARQUET_SUPPORT:
-                s3_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
-                logger.info(f"📥 Loading {taxi_type.upper()} data: s3://{self.bucket_name}/{s3_key}")
-                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-                table = pq.read_table(io.BytesIO(response['Body'].read()))
-                df = table.to_pandas()
-            else:
-                raise Exception("No parquet support")
-        except Exception as e:
-            try:
-                s3_key = f"datasets/{taxi_type}/year={year}/month={month:02d}/{taxi_type}_tripdata_{year}-{month:02d}.csv"
-                logger.info(f"📥 Fallback CSV: {taxi_type.upper()} data: s3://{self.bucket_name}/{s3_key}")
-                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-                df = pd.read_csv(io.BytesIO(response['Body'].read()))
-            except Exception as e2:
-                logger.warning(f"⚠️ Could not load {taxi_type} taxi data: {e2}")
-        
-        # If loading failed, use fallback
-        if df is None:
-            logger.warning(f"⚠️ No {taxi_type} taxi data available - using synthetic fallback")
+            logging.info(f"📥 Loading data: s3://{self.bucket_name}/{s3_key}")
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+            df = pd.read_parquet(io.BytesIO(response['Body'].read()))
+            logging.info(f"📊 Loaded {len(df)} trips from {s3_key}")
+            return self.process_taxi_data_hikima_single_type(df, taxi_type, year, month, day, borough, time_start, time_end)
+        except self.s3_client.exceptions.NoSuchKey:
+            logging.warning(f"⚠️ Data file not found: {s3_key}. Using synthetic data.")
             return self.generate_fallback_data(taxi_type, year, month, day, borough, time_start, time_end)
-        
-        logger.info(f"📊 Loaded {taxi_type.upper()}: {len(df)} trips")
-        
-        # Process the loaded data using exact Hikima methodology for SINGLE taxi type
-        return self.process_taxi_data_hikima_single_type(df, taxi_type, year, month, day, borough, time_start, time_end)
-    
+        except Exception as e:
+            logging.error(f"❌ Failed to load or process data from {s3_key}: {e}", exc_info=True)
+            return pd.DataFrame(), pd.DataFrame()
+
     def generate_fallback_data(self, taxi_type: str, year: int, month: int, day: int, 
                               borough: str, time_start: datetime, time_end: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Generate realistic data following research statistics when real data is not available."""
@@ -1375,10 +1411,19 @@ class PricingExperimentRunner:
             'avg_acceptance_rate': avg_acceptance_rate,
             'solver_status': pl.LpStatus.get(prob.status, 'Unknown') if 'prob' in locals() else 'Error'
         }
-    
+
+    def create_success_marker(self, experiment_id: str):
+        """Create a _SUCCESS file in the experiment's root directory in S3."""
+        try:
+            success_key = f"experiments/{experiment_id}/_SUCCESS"
+            self.s3_client.put_object(Bucket=self.bucket_name, Key=success_key, Body=b'')
+            logging.info(f"✅ Successfully created _SUCCESS marker at s3://{self.bucket_name}/{success_key}")
+        except Exception as e:
+            logging.error(f"❌ Failed to create _SUCCESS marker for {experiment_id}: {e}", exc_info=True)
+
     def save_results_to_s3(self, results: List[Dict[str, Any]], event: Dict[str, Any], 
                           data_stats: Dict[str, Any], performance_summary: Dict[str, Any]) -> str:
-        """Save experiment results to S3 with new directory structure."""
+        """Save experiment results to S3 with a structured path."""
         try:
             import random
             import pandas as pd
@@ -1433,7 +1478,7 @@ class PricingExperimentRunner:
                     'experiment_id': training_id,
                     'scenario_id': scenario_id,
                     'execution_timestamp': execution_timestamp,
-                    'seed': random.getstate()[1][0] if hasattr(random.getstate()[1], '__getitem__') else None,
+                    'seed': event.get('seed'),
                     'vehicle_type': vehicle_type,
                     'acceptance_function': acceptance_function,
                     'borough': borough,
@@ -1457,7 +1502,7 @@ class PricingExperimentRunner:
                     'parallel_workers': event.get('parallel', 3),
                     'production_mode': event.get('production', False),
                     'debug_mode': event.get('debug', False),
-                    'num_eval': event.get('num_eval', 1000)  # Number of Monte Carlo simulations
+                    'num_eval': event.get('num_iter')
                 },
                 'data_statistics': data_stats,
                 'matching_statistics': matching_stats,
@@ -1478,17 +1523,14 @@ class PricingExperimentRunner:
             results_df = pd.DataFrame(results)
             
             # Ensure all columns are present, even if some methods might not have all fields
-            for method_name in results_df['method_name'].unique():
-                if method_name not in results_df.columns:
-                    results_df[method_name] = None
-            
-            # Reorder columns to match the original file's expected structure
-            # This is a heuristic and might need adjustment based on the exact structure of results
-            # For now, we'll try to keep the most common ones and add others if they exist
-            common_cols = ['method_name', 'objective_value', 'computation_time', 'num_requests', 'num_taxis', 'avg_acceptance_rate']
-            all_cols = results_df.columns.tolist()
-            final_cols = [c for c in common_cols if c in all_cols] + [c for c in all_cols if c not in common_cols]
-            
+            # This handles cases where some methods fail and don't return all fields.
+            expected_cols = ['method_name', 'objective_value', 'computation_time', 'num_requests', 'num_taxis', 'avg_acceptance_rate', 'error']
+            for col in expected_cols:
+                if col not in results_df.columns:
+                    results_df[col] = None
+
+            # Reorder columns for consistency
+            final_cols = [c for c in expected_cols if c in results_df.columns] + [c for c in results_df.columns if c not in expected_cols]
             results_df = results_df[final_cols]
             
             # Convert to parquet
@@ -1520,20 +1562,6 @@ class PricingExperimentRunner:
         except Exception as e:
             logger.error(f"❌ Failed to save results to S3: {e}")
             raise
-
-    def save_success_file_to_s3(self, s3_path: str):
-        """Save a _SUCCESS file to the specified S3 path to signal completion."""
-        try:
-            success_key = f"{s3_path}/_SUCCESS"
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=success_key,
-                Body=b'',
-                ContentType='application/text'
-            )
-            logger.info(f"✅ Successfully created _SUCCESS file at s3://{self.bucket_name}/{success_key}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create _SUCCESS file: {e}")
 
     def save_progress_to_s3(self, experiment_id: str, processed: int, total: int):
         """Save a _PROGRESS file to S3 with the current experiment status."""

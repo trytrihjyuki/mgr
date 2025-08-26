@@ -1,0 +1,3450 @@
+
+You are a senior SWE your task is to review, audit to finally totally refactor and improve/upgrade existing framework so create basically new one refercing on exisiting some parts to run experiments logic code should match 1:1 provided by provided original codebase in the context (especoally all methods except LP which is new)
+
+All experiments must be a runnable docker image per each day, one run is a one day of experimenting, fully configurable, keep the code OOP and ensure its clean and well implemented no duplications, logic sharing etc. here are all supported arguments which we want to execute ad a docker locally AND ON EC2 instance run:
+
+Processing-date - this is a date of day we process in this experiment run e.g. 2019-10-06
+vehicle-type - type of vehicle e.g. green or fav
+boroughs - which borough we run we run experiment only supported are defined in area_info.csv, like:
+JECTID	Shape_Leng	Shape_Area	zone	LocationID	borough	longitude	latitude
+1	0.116357453	0.000782307	Newark Airport	1	EWR	-74.17152568	40.68948814
+2	0.433469667	0.00486634	Jamaica Bay	2	Queens	-73.82248951	40.61079107
+3	0.084341106	0.000314414	Allerton/Pelham Gardens	3	Bronx	-73.84494664	40.86574543
+4	0.043566527	0.000111872	Alphabet City	4	Manhattan	-73.97772563	40.72413721
+
+method - our framework must support all methods from original code: MinMaxCostFlow,MAPS,LinUCB like also new added: LP method (logic and more about methods is below in context)
+eval - this is how do we evaluate probability of acceptance, using relu or sigmoid so: PL or Sigmoid
+num-iter - this is paramteres which defines how many monte carlo iterations should we do for each time-window
+start-hour - this param defines beginning of window, so which time fram of the full dataframe we take for experiments
+end-hour - the similar as above, to use 100% dataset we need start-hour=0 and end-hour=23
+time-delta - the delta definfing time-window size e.g. 5m or 1h for less crowded boroughs then Manhattan
+
+note that most of the args should accept multiple values eg. mehtod=linucb,lp,minmaxcostflow,maps for all methods run but on the other hand time delta must be unique 
+
+after loading we need to print number of time windows (of experiment e.g. 5m) and total number multiplied by num_iter so number of calculations
+
+We want to have parrarelism for faster processing e.g. we have start hour 6 and end-hour 22 and time delta 30 so we have 2*16 = 32 time windows for experiments, and we could possible run NUM_WORKERS of them in parrarel so 1. 2. And 3. Time window can be processed in parallel when num_workers=3
+
+finally the project must be runnable via cli using some script like:
+script --arg1=val1 ...
+
+the context provided below is for more undersdtaingin, it proivdes origninal codebase (the github repo with all methods and experimnenting code) like also paper with theory.
+
+finally we need some notebook which reads results intermitieates .parquets saved to:
+s3://taxi-benchmark/experiment/run_10/results_batch_12.parquet
+also we should have after expeirment dinished (and this can be used also as a _SUCCESS file so this ensures experiment ended properly)
+s3://taxi-benchmark/experiment/run_10/experiment_summary.json
+where will be stored results aggregated for each method: so e,g,
+{
+  "experiment_metadata": {
+    "experiment_id": "72589",
+    "execution_timestamp": "20250704_002701",
+    "seed": 433543381,
+    "num_iter"=10,
+    "vehicle_type": "yellow",
+    "acceptance_function": "Sigmoid",
+    "borough": "Manhattan",
+    "year": 2019,
+    "month": 10,
+    "day": 1,
+    "training_id": "exp_yellow_Manhattan_20250704_000741",
+    "total_scenarios": 20
+  },
+  "experiment_setup": {
+    "methods": [
+      "LP",
+      "MinMaxCostFlow",
+      "LinUCB",
+      "MAPS"
+    ],
+    "hour_start": 0,
+    "hour_end": 24,
+    "time_interval": 5,
+    "time_unit": "m",
+    "parallel_workers": 2,
+    "production_mode": false,
+    "execution_date": "20250704_002701",
+    "num_eval": 20
+  },
+  "aggregated_statistics": {
+    "total_scenarios": 20,
+    "requesters": {
+      "mean": 136.2,
+      "median": 147.0,
+      "std": 76.13317279609461,
+      "min": 12.0,
+      "max": 238.0,
+      "sum": 2724.0
+    },
+    "taxis": {
+      "mean": 141.35,
+      "median": 155.0,
+      "std": 79.1948704146929,
+      "min": 16.0,
+      "max": 260.0,
+      "sum": 2827.0
+    },
+    "trip_distances_km": {
+      "mean": 258.58403472830963,
+      "median": 260.92788597457627,
+      "std": 14.737217039412124,
+      "min": 217.91926636363635,
+      "max": 281.6888237130802,
+      "sum": 5171.680694566193
+    },
+    "trip_amounts": {
+      "mean": 2.8151922732115136,
+      "median": 2.810382623705409,
+      "std": 0.36088306121795927,
+      "min": 2.1616033755274264,
+      "max": 3.5708333333333333,
+      "sum": 56.30384546423027
+    },
+    "request_taxi_ratios": {
+      "mean": 0.9769520817637586,
+      "median": 1.0,
+      "std": 0.1684516929158514,
+      "min": 0.5714285714285714,
+      "max": 1.3125
+    },
+    "data_availability": {
+      "scenarios_with_data": 20,
+      "scenarios_without_data": 0,
+      "data_coverage_percentage": 100.0
+    }
+  },
+  "results_basic_analysis": {
+    "total_methods": 4,
+    "total_method_executions": 80,
+    "successful_executions": 80,
+    "failed_executions": 0,
+    "methods_performance": {
+      "LP": {
+        "objective_values": {
+          "mean": 8.90673046505314,
+          "median": 0.04893244584575969,
+          "std": 13.580570048315531,
+          "min": 0.0,
+          "max": 44.12040407063106,
+          "sum": 178.1346093010628
+        },
+        "computation_times": {
+          "mean": 7.196597611904144,
+          "median": 5.892283320426941,
+          "std": 5.9871400514536015,
+          "min": 0.05899620056152344,
+          "max": 17.15547752380371,
+          "sum": 143.93195223808289
+        },
+        "acceptance_rates": {
+          "mean": 0.4346289441800817,
+          "median": 0.43462894418008163,
+          "std": 6.329245045284193e-17,
+          "min": 0.4346289441800816,
+          "max": 0.43462894418008174
+        },
+        "matching_performance": {
+          "matching_ratios": {
+            "mean": 0.4267058805212926,
+            "median": 0.4306569343065693,
+            "std": 0.010813123146566276,
+            "min": 0.3888888888888889,
+            "max": 0.4345991561181435
+          },
+          "efficiency_ratios": {
+            "mean": 0.4479300202521938,
+            "median": 0.4337719298245614,
+            "std": 0.03746608767689572,
+            "min": 0.3888888888888889,
+            "max": 0.5625
+          },
+          "scenarios_with_matches": 20,
+          "scenarios_without_matches": 0
+        },
+        "data_characteristics": {
+          "num_requests": {
+            "mean": 136.2,
+            "median": 147.0,
+            "std": 76.13317279609461,
+            "min": 12.0,
+            "max": 238.0,
+            "sum": 2724.0
+          },
+          "num_taxis": {
+            "mean": 141.35,
+            "median": 155.0,
+            "std": 79.1948704146929,
+            "min": 16.0,
+            "max": 260.0,
+            "sum": 2827.0
+          }
+        },
+        "success_rate": 1.0,
+        "scenarios_completed": 20,
+        "relative_performance": {
+          "rank_by_objective": 2,
+          "rank_by_efficiency": 3
+        }
+      },
+      "MinMaxCostFlow": {
+        "objective_values": {
+          "mean": 8.825559025364631,
+          "median": 0.0,
+          "std": 13.286594888297198,
+          "min": 0.0,
+          "max": 42.14715977142889,
+          "sum": 176.51118050729264
+        },
+        "computation_times": {
+          "mean": 5.323288059234619,
+          "median": 5.139500617980957,
+          "std": 4.225044095206234,
+          "min": 0.04179835319519043,
+          "max": 12.902523517608643,
+          "sum": 106.46576118469238
+        },
+        "acceptance_rates": {
+          "mean": 0.906648460785527,
+          "median": 0.9066484607855271,
+          "std": 2.1784148785229479e-16,
+          "min": 0.9066484607855269,
+          "max": 0.9066484607855275
+        },
+        "matching_performance": {
+          "matching_ratios": {
+            "mean": 0.8840538198849235,
+            "median": 0.9024571854058079,
+            "std": 0.04217663725266338,
+            "min": 0.7619047619047619,
+            "max": 0.905511811023622
+          },
+          "efficiency_ratios": {
+            "mean": 0.9251684329820392,
+            "median": 0.9053106500373584,
+            "std": 0.042187438725320686,
+            "min": 0.8333333333333334,
+            "max": 1.0
+          },
+          "scenarios_with_matches": 20,
+          "scenarios_without_matches": 0
+        },
+        "data_characteristics": {
+          "num_requests": {
+            "mean": 136.2,
+            "median": 147.0,
+            "std": 76.13317279609461,
+            "min": 12.0,
+            "max": 238.0,
+            "sum": 2724.0
+          },
+          "num_taxis": {
+            "mean": 141.35,
+            "median": 155.0,
+            "std": 79.1948704146929,
+            "min": 16.0,
+            "max": 260.0,
+            "sum": 2827.0
+          }
+        },
+        "success_rate": 1.0,
+        "scenarios_completed": 20,
+        "relative_performance": {
+          "rank_by_objective": 3,
+          "rank_by_efficiency": 1
+        }
+      },
+      "LinUCB": {
+        "objective_values": {
+          "mean": 4.51433824825952,
+          "median": 0.0,
+          "std": 8.00014426101904,
+          "min": 0.0,
+          "max": 29.663741144852782,
+          "sum": 90.2867649651904
+        },
+        "computation_times": {
+          "mean": 0.822307002544403,
+          "median": 0.8325331211090088,
+          "std": 0.10459774153578241,
+          "min": 0.6700327396392822,
+          "max": 1.023082971572876,
+          "sum": 16.44614005088806
+        },
+        "acceptance_rates": {
+          "mean": 0.003954737180021465,
+          "median": 0.0,
+          "std": 0.0067268822175696056,
+          "min": 0.0,
+          "max": 0.024862785968658874
+        },
+        "matching_performance": {
+          "matching_ratios": {
+            "mean": 0.0017251024703666777,
+            "median": 0.0,
+            "std": 0.004408253914927943,
+            "min": 0.0,
+            "max": 0.016666666666666666
+          },
+          "efficiency_ratios": {
+            "mean": 0.0017315592903828197,
+            "median": 0.0,
+            "std": 0.004422344873780096,
+            "min": 0.0,
+            "max": 0.016666666666666666
+          },
+          "scenarios_with_matches": 3,
+          "scenarios_without_matches": 17
+        },
+        "data_characteristics": {
+          "num_requests": {
+            "mean": 136.2,
+            "median": 147.0,
+            "std": 76.13317279609461,
+            "min": 12.0,
+            "max": 238.0,
+            "sum": 2724.0
+          },
+          "num_taxis": {
+            "mean": 141.35,
+            "median": 155.0,
+            "std": 79.1948704146929,
+            "min": 16.0,
+            "max": 260.0,
+            "sum": 2827.0
+          }
+        },
+        "success_rate": 1.0,
+        "scenarios_completed": 20,
+        "relative_performance": {
+          "rank_by_objective": 4,
+          "rank_by_efficiency": 4
+        }
+      },
+      "MAPS": {
+        "objective_values": {
+          "mean": 8.95965066289753,
+          "median": 0.0,
+          "std": 13.435168744208942,
+          "min": 0.0,
+          "max": 41.646896996995736,
+          "sum": 179.1930132579506
+        },
+        "computation_times": {
+          "mean": 4.402482092380524,
+          "median": 4.147318482398987,
+          "std": 3.458352391517998,
+          "min": 0.03735089302062988,
+          "max": 9.498762130737305,
+          "sum": 88.04964184761047
+        },
+        "acceptance_rates": {
+          "mean": 0.7701572926294695,
+          "median": 0.7701572926294694,
+          "std": 1.5895974606912447e-16,
+          "min": 0.7701572926294692,
+          "max": 0.7701572926294697
+        },
+        "matching_performance": {
+          "matching_ratios": {
+            "mean": 0.7609014501003161,
+            "median": 0.7664233576642335,
+            "std": 0.013199425271996522,
+            "min": 0.7222222222222222,
+            "max": 0.7696078431372549
+          },
+          "efficiency_ratios": {
+            "mean": 0.7986877123529743,
+            "median": 0.7692577030812325,
+            "std": 0.06442103649743423,
+            "min": 0.7222222222222222,
+            "max": 1.0
+          },
+          "scenarios_with_matches": 20,
+          "scenarios_without_matches": 0
+        },
+        "data_characteristics": {
+          "num_requests": {
+            "mean": 136.2,
+            "median": 147.0,
+            "std": 76.13317279609461,
+            "min": 12.0,
+            "max": 238.0,
+            "sum": 2724.0
+          },
+          "num_taxis": {
+            "mean": 141.35,
+            "median": 155.0,
+            "std": 79.1948704146929,
+            "min": 16.0,
+            "max": 260.0,
+            "sum": 2827.0
+          }
+        },
+        "success_rate": 1.0,
+        "scenarios_completed": 20,
+        "relative_performance": {
+          "rank_by_objective": 1,
+          "rank_by_efficiency": 2
+        }
+      }
+    },
+    "overall_performance": {
+      "objective_values": {
+        "mean": 7.801569600393707,
+        "median": 0.0,
+        "std": 12.448780367313356,
+        "min": 0.0,
+        "max": 44.12040407063106,
+        "sum": 624.1255680314965
+      },
+      "computation_times": {
+        "mean": 4.436168691515922,
+        "median": 2.840734839439392,
+        "std": 4.667335033096624,
+        "min": 0.03735089302062988,
+        "max": 17.15547752380371,
+        "sum": 354.8934953212738
+      },
+      "acceptance_rates": {
+        "mean": 0.528847358693775,
+        "median": 0.6023931184047755,
+        "std": 0.348352831786687,
+        "min": 0.0,
+        "max": 0.9066484607855275
+      }
+    }
+  }
+}
+
+
+the data for experiments is located in e.g.
+s3://magisterka/datasets/fhv/year=2023/month=09/fhv_tripdata_2023-09.parquet
+before running expeirment and printing ensure data for all expeirment days so period of expeirment is exisiting in S3, note that s3://magisterka is just our S3_BASE in .env
+here is .env
+
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY="
+AWS_REGION="eu-north-1"
+
+SUBNET_ID=
+# The ID of the security group for the EC2 instance.
+# Must allow outbound HTTPS traffic and inbound SSH if you need to debug.
+SECURITY_GROUP_IDS=
+# The name of an EC2 key pair to associate with the instance for SSH access.
+KEY_NAME="mbpro"
+# The name of the IAM instance profile for the EC2 instance.
+# Needs permissions for ECR and S3.
+IAM_INSTANCE_PROFILE="PricingExperimentRole"
+# The name of the S3 bucket for storing results.
+S3_BUCKET="magisterka"
+
+so in s3://magisterka/datasets/ we have:
+
+area_information.csv
+csv
+
+Standard
+fhv/
+Folder
+-
+-
+-
+green/
+Folder
+-
+-
+-
+yellow/
+Folder
+
+
+and in s3://magisterka/models/linucb/green_Queens_201904/trained_model.pkl we have stored linucb weigths
+
+But results save to s3://taxi-benchmark
+
+
+the very important to have great monitoring and ideally some logging
+
+also finally provide README.md equipped with complete tutorial how to use expeirment frameork with S3 how to setup credentials using aws cli and how to read logs and 
+
+
+here is more context which should be aa refnerence, ensure our methods are implemented 1:1 as provided github repo, but better strucuted and AWS based, ensure we pull and evaluate data the same way:
+
+its criticial important to have the same logic for data generaiton and simulation as provided by github repo in below context:
+
+
+CONTEXT START:
+
+
+read the text below, and tell me what is the mathematical program used in the paper: % Opcje klasy 'iithesis' opisane sa w komentarzach w pliku klasy. Za ich pomoca % ustawia sie przede wszystkim jezyk oraz rodzaj (lic/inz/mgr) pracy. \documentclass[shortabstract]{iithesis} \usepackage[utf8]{inputenc} %%%%% DANE DO STRONY TYTUŁOWEJ % Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie % pracy nalezy podac zarowno w jezyku polskim, jak i angielskim. % Pamietaj o madrym (zgodnym z logicznym rozbiorem zdania oraz estetyka) recznym % zlamaniu wierszy w temacie pracy, zwlaszcza tego w jezyku pracy. Uzyj do tego % polecenia \fmlinebreak. \polishtitle {Jedziemy kurwa mgr} \englishtitle {we go fuck master} \polishabstract {W swojej pracy Hikima et al.~\cite{Hikima_Akagi_Kim_Kohjima_Kurashima_Toda_2021} przedstawili model wyceny przejazdów samochodowych w usługach tak zwanego \emph{ride-hailingu} jak Uber czy Bolt. W tym modelu zaproponowali algorytm 3-aproksymacyjny dla problemu maksymalizacji zysku z przejazdów. W niniejszej pracy pokazujemy 2-aproksymacyjny algorytm dla problemu, który zdaje się być znacznie prostszy w potencjalnej implementacji. Ponadto, jego gwarancja aproksymacji odnosi się do znacznie silniejszego ograniczenia górnego w porównaniu do tego, którego użyto w pracy~\cite{Hikima_Akagi_Kim_Kohjima_Kurashima_Toda_2021}.} \englishabstract{english} % w pracach wielu autorow nazwiska mozna oddzielic poleceniem \and \author {Maurycy Borkowski} % w przypadku kilku promotorow, lub koniecznosci podania ich afiliacji, linie % w ponizszym poleceniu mozna zlamac poleceniem \fmlinebreak \advisor {dr Marek Adamczyk} %\date {} % Data zlozenia pracy % Dane do oswiadczenia o autorskim wykonaniu %\transcriptnum {} % Numer indeksu %\advisorgen {dr. Jana Kowalskiego} % Nazwisko promotora w dopelniaczu %%%%% %%%%% WLASNE DODATKOWE PAKIETY % %\usepackage{graphicx,listings,amsmath,amssymb,amsthm,amsfonts,tikz} % %%%%% WŁASNE DEFINICJE I POLECENIA % %\theoremstyle{definition} \newtheorem{definition}{Definition}[chapter] %\theoremstyle{remark} \newtheorem{remark}[definition]{Observation} %\theoremstyle{plain} \newtheorem{theorem}[definition]{Theorem} %\theoremstyle{plain} \newtheorem{lemma}[definition]{Lemma} %\renewcommand \qedsymbol {\ensuremath{\square}} % ... %%%%% \usepackage[T1]{fontenc} \usepackage{geometry} \geometry{verbose,tmargin=2cm,bmargin=2cm,lmargin=2cm,rmargin=2cm} \usepackage{color} \usepackage{float} \usepackage{amsmath} \usepackage{amsthm} \usepackage{amssymb} \usepackage{graphicx} \makeatletter %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LyX specific LaTeX commands. \floatstyle{ruled} \newfloat{algorithm}{tbp}{loa} \providecommand{\algorithmname}{Algorytm} \floatname{algorithm}{\protect\algorithmname} %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Textclass specific LaTeX commands. \theoremstyle{plain} \newtheorem{thm}{\protect\theoremname} \ifx\proof\undefined \newenvironment{proof}[1][\protect\proofname]{\par \normalfont\topsep6\p@\@plus6\p@\relax \trivlist \itemindent\parindent \item[\hskip\labelsep\scshape #1]\ignorespaces }{% \endtrivlist\@endpefalse } \providecommand{\proofname}{Proof} \fi \theoremstyle{plain} \newtheorem{lem}[thm]{\protect\lemmaname} %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% User specified LaTeX commands. \providecommand{\thmautorefname}{Theorem} \providecommand{\corautorefname}{Corollary} \providecommand{\lemautorefname}{Lemma} \usepackage{etoolbox}% http://ctan.org/pkg/etoolbox \makeatletter \let\old@start@align\start@align \def\start@align{\setcounter{equation}{0}\old@start@align} \makeatother \makeatother \usepackage{babel} \providecommand{\lemmaname}{Lemat} \providecommand{\theoremname}{Twierdzenie} \begin{document} \global\long\def\br#1{\left(#1\right)}% \global\long\def\brq#1{\left[#1\right]}% \global\long\def\pr#1{\mathbb{P}\brq{#1}}% \global\long\def\set#1{\left\{ #1\right\} }% \global\long\def\prcond#1#2{\mathbb{P}\brq{\left.#1\right|#2}}% \global\long\def\prm#1{ #1^{\prime} }% \global\long\def\exls#1#2{\mathbb{E}_{#1}\left[#2\right]}% \global\long\def\setst#1#2{\left\{ #1\left|#2\right.\right\} }% \global\long\def\ind#1{\boldsymbol{1}\brq{#1}}% \global\long\def\excondls#1#2#3{\mathbb{E}_{#1}\brq{\left.#2\right|#3}}% \global\long\def\ex#1{\mathbb{E}\brq{#1}}% \global\long\def\prcondls#1#2#3{\mathbb{P}_{#1}\brq{\left.#2\right|#3}}% \global\long\def\pc{\br{p_{c}}_{c\in C}}% \global\long\def\cok{C_{\text{ok}}}% \chapter{Wstęp} \iffalse Obliczanie skojarzeń w grafach dwudzielnych bardzo często pojawia się w realnym życiu, kojarzenie zadań do maszyn, pacjentów do szpitali, pracowników do prac i wiele innych. Nowszym i jeszcze bardziej życiowym problemem jest budowanie skojarzenia w warunkach niepewności, gdzie chcemy maksymalizować oczekiwaną wartość skojarzenia. Na przykład w problemie skojarzenia dawców i biorców organów, gdzie pytanie o istnienie każdej krawędzi (czy jest możliwa transplantacja dla danej pary) jest kosztowne i czasochłonne, ale znamy wartości prawdopodobieństwa istnienia krawędzi (). Kolejnym zastosowaniem tego problemu może być wycena przejazdów w ride-hailingu, gdzie mamy zbiór taksówek obsługujących przejazdy i chcemy skojarzyć je z zamawiającymi. Każdemu klientowi wyceniamy jego przejazd, na podstawie zaproponowanej ceny on ją akceptuje lub nie. Czyli w tym modelu możemy niejako sterować rozkładami prawdopodobieństw istnienia krawędzi za pomocą cen, nazywanych zmiennymi sterującymi ponieważ określają (sterują) one rozkład(em). \fi Rozważmy sposób działania aplikacji oferujących usługę \emph{ride-hailingu} np. Uber albo Bolt. W aplikacji użytkownik zamawiający przejazd zaznacza adres docelowy, do którego chce dojechać oraz adres odbioru, w którym się znajduje. Dostawca wycenia jego przejazd i oferuje mu cenę, którą klient akceptuje lub nie. Jeżeli zaakceptuje cenę to dostawca przydziela mu kierowcę, który obsłuży jego przejazd za ustaloną cenę i przyjedzie go odebrać w niedługim ($\approx5$ min.) czasie. Może się jednak zdarzyć, że dostawca nie ma żadnej taksówki w pobliżu klienta i wtedy wysyła informacje z odpowiednim komunikatem i w tym momencie nie obsługuje jego przejazdu. Jest to oczywiście niepożądane i jako dostawca zależy nam na jak najmniejszej liczbie takich sytuacji. Z punktu widzenia przewoźnika dostajemy w każdej minucie kilkadziesiąt czy nawet kilkaset zapytań w danej lokacji o przejazdy. Mamy dane lokalizacje wolnych taksówek i informacje, które z nich są w stanie dotrzeć w niedługim czasie do pewnego klienta. Nasz serwis ma za zadanie wyznaczenia cen dla klientów. Na zbiorze zamawiających, którzy zaakceptowali cenę liczymy \emph{najlepsze} skojarzenie (dopasowanie klient-taksówka), \emph{najlepsze} tj. takie, które maksymalizuje dochód minus koszty przejazdów. Na etapie (liczenie skojarzenia) może się zdarzyć, że pewnych klientów nie skojarzymy z taksówką mimo tego, że zaakceptowali oni cenę. W tej pracy przybliżymy rozwiązanie problemu optymalizacji oczekiwanego zysku \emph{ride-hailingu}, przedstawione przez Hikimę~et.~al w pracy \cite{Hikima_Akagi_Kim_Kohjima_Kurashima_Toda_2021}, a następnie zaproponujemy prostszy i efektywniejszy algorytm optymalizujący ten problem.\\ \iffalse W tej pracy przybliżymy rozwiązanie problemu optum Rozważmy sobie sposób działania aplikacji takiej jak Uber lub Bolt. - uzytkownik zaznacza dokad chce jechac - dostaje cene: akceptuje lub nie - jesli akceptuje, to czeka niedlugo na przejazd, chociaz czasem moze dostac informacje, ze jednak nie ma taksowek z punktu widzenia przewoznika wyglada to tak: - w danej minucie serwis dostaje kilkadziesiat lub kilkaset zgloszen - dane sa lokalizacje wolnych taksowek oraz informacja ktore taksowki sa w stanie dostac sie danego klienta w ciagu mniej niz 5 minut - serwis ma za zadanie wyznaczenie cen - na zbiorze klientow ktorzy zaakceptowali liczymy najlepsze skojarzenie, tj. takie ktore maksymalizuje zysk minus koszt przejazdu w tym kroku moze sie zdarzyc, ze pewnych klientow nie skojarzymy z zadna taksowka mimo ze sie zgodzili. Jak widac z powyzszego opisu, jedyna rzecz, na ktora serwis ma wplyw to ceny proponowane klientom. W tej pracy przybliżymy rozwiązanie problemu optymalizacji oczekiwanego zysku ride-hailingu, przedstawione przez Hikimęet.al w pracy , a następnie zaproponujemy prostszy i efektywniejszy algorytm optymalizujący ten problem. \fi \chapter{Definicja problemu} W swojej pracy \cite{Hikima_Akagi_Kim_Kohjima_Kurashima_Toda_2021} Hikima~et. al przedstawili następujące sformułownanie modelu. \section{Model} \subsubsection{Instancja problemu} Dany jest ważony graf dwudzielny $G=\br{C,T,E}$. Zbiór wierzchołków $C$ interpretujemy jako zbiór klientów, natomiast $T$ jako zbiór taksówek, które możemy potencjalnie przypisać zamawiającym. Krawędzie zadają relację osiągalności poszczególnych taksówek do konkretnych agentów tj. dla każdej krawędzi $\br{c,t}\in E$ oznacza, że taksówka $t$ może obsłużyć klienta $c$. Koszt każdej krawędzi oznaczamy jako $w_{c,t}$. \subsubsection{Model rozwiązania i procedura skojarzenia} Rozwiązanie sprowadza się do znalezienia wektora cen $\br{\pi_{c}}_{c\in C}$. Dla każdego klienta $c$, na podstawie ceny $\pi_{c}$ stochastycznie decyduje się, czy bierze on udział w kolejnym etapie procesu tworzenia skojarzenia: klient kontynuuję procedurę (przechodzi do kolejnego etapu) z prawdopodobieństwem $\pr{v_{c}\geq\pi_{c}}$ albo odchodzi z prawdopodobieństwem $1-\pr{v_{c}\geq\pi_{c}}$. Jeżeli klient $c$ nie akceptuje zaproponowanej ceny, usuwamy z grafu jego wierzchołek i krawędzie incydentne z nim. Oznaczmy jako $G_{\text{ok }}=\br{\cok,T,E_{\text{ok}}}$ graf powstały po wyrzuceniu wszystkich klientów, którzy nie zaakceptowali ceny, oraz wszystkich krawędzi z nimi związanych. Z tego grafu wybieramy skojarzenie $M\subseteq E_{\text{ok}}$ (zbiór krawędzi nie posiadających wspólnych wierzchołków). Wartością rozwiązania jest suma cen pomniejszonych o wagę, tj. $\pi_{c}-w_{c,t}$. \newpage \subsubsection{Skojarzenia} Zauważmy, że gdy ceny $\br{\pi_{c}}_{c\in C}$ są ustalone i poznaliśmy decyzje klientów na temat ich akceptacji, tj. wektor $\br{\ind{v_{c}\geq\pi_{c}}}_{c\in C}$ --- czy też równoważnie zbiór $C_{\text{ok}}=\setst{c\in C}{v_{c}\geq\pi_{c}}$ --- , to nasz problem sprowadza się do klasycznego problemu znajdowania maksymalnego skojarzenia w ważonym grafie dwudzielnym, który możemy opisać następujący programem liniowym: \begin{align*} f\br{\pi_{1},...,\pi_{n};\cok}=\,\,\max_{z_{c,t}\in C\times T}\sum_{\br{c,t}\in E} & \br{\pi_{c}-w_{c,t}}\cdot z_{c,t}\\ \text{{s.t.}}\sum_{t\in\delta\br c} & z_{c,t}\leq\ind{c\in\cok}\quad\forall_{c\in C}\\ \sum_{c\in\delta\br t} & z_{c,t}\leq1\quad\forall_{t\in T}\\ & z_{c,t}\in\{0,1\}\quad\forall_{\br{c,t}\in E} \end{align*} gdzie $\delta\br c$ oznacza zbiór taksówek incydentnych z $c$ --- i analogicznie $\delta\br t$ oznacza zbiór klientów incydentnych z $t$ --- $z_{c,t}\in\{0,1\}$ określa czy $\br{c,t}\in E$ są ze sobą skojarzone ($z_{c,t}=1$) czy nie ($z_{c,t}=0$). Pierwsze ograniczenie mówi, że tylko wierzchołek $c$, który zaakceptuje zaproponowaną cenę może zostać skojarzony z jedną taksówką $t$; drugie gwarantuje, że każdy wierzchołek $t$ może zostać skojarzony tylko z jednym klientem $c$. \subsubsection{Problem ride-hailingu} Funkcja $f\br{\pi_{1},...,\pi_{n};\br{v_{c}}_{c\in C}}$ wyznacza maksymalne skojarzenie dla zadanych przez nas cen $\br{\pi_{c}}_{c\in C}$ przy jednoczesnej wiedzy o tym, którzy klienci zaakceptowali zaproponowane im ceny. Jednakże przed wyznaczeniem cen $\br{\pi_{c}}_{c\in C}$ nie znamy jeszcze realizacji $\br{\ind{v_{c}\geq\pi_{c}}}_{c\in C}$. A w związku z tym nasze zadanie to znalezienie takiego wektora $\br{\pi_{c}}_{c\in C}$, który zmaksymalizuje nam średnią wartość skojarzenia, gdzie średnia jest wzięta po wszystkich możliwych realizacjach wektora $\br{\ind{v_{c}\geq\pi_{c}}}_{c\in C}$. Innymi słowy nasze zadanie polega na maksymalizacji następującej funkcji wektora $\br{\pi_{c}}_{c\in C}$: \[ \max_{\br{\pi_{c}}_{c\in C}\in\mathbb{R}_{+}^{|C|}}\exls{\br{v_{c}}{}_{c\in C}}{f\br{\pi_{1},...,\pi_{n};\setst c{v_{c}\geq\pi_{c}}}}.\qquad\text{(RH-PROBLEM)} \] Powyższą zwięzłą formułę $\exls{\br{\pi_{c}}_{c\in C}}{f\br{\pi_{1},...,\pi_{n};\setst c{v_{c}\geq\pi_{c}}}}$ można zapisać w nieco bardziej zrozumiały sposób: \begin{align*} \exls{\br{v_{c}}{}_{c\in C}}{f\br{\pi_{1},...,\pi_{n};\setst c{v_{c}\geq\pi_{c}}}} & =\sum_{\cok\subseteq C}\br{\prod_{c\in\cok}\pr{v_{c}\geq\pi_{c}}\cdot\prod_{c\notin\cok}\br{1-\pr{v_{c}\geq\pi_{c}}}\cdot f\br{\pi_{1},...,\pi_{n};\cok}} \end{align*} \\ \newpage \section{Podejście Hikimy~et al.} Z tego sformułowania widać od razu, że nasz problem jest trudny obliczeniowo, ponieważ występuje w nim sumowanie po wykładniczej ilości składników. Jednocześnie funkcja celu nie jest wklęsła wg~\cite{Hikima_Akagi_Kim_Kohjima_Kurashima_Toda_2021}, co uniemożliwia użycie standardowych narzędzi optymalizacji wypukłej. W związku z tym Hikima et al.~w swoim podejściu postawili nowy problem matematyczny: \begin{align*} \max_{\br{\pi_{c}}_{c\in C}\in\mathbb{R}_{+}^{C}}\max_{z_{c,t}\in C\times T}\sum_{\br{c,t}\in E} & \br{\pi_{c}-w_{c,t}}\cdot z_{c,t}\qquad\text{(UP-PROBLEM)}\\ \text{{s.t.}}\sum_{t\in\delta\br c} & z_{c,t}\leq\pr{v_{c}\geq\pi_{c}}\quad\forall_{c\in C}\\ \sum_{c\in\delta\br t} & z_{c,t}\leq1\quad\forall_{t\in T}\\ & z_{c,t}\in\br{0,1}\quad\forall_{\br{c,t}\in E} \end{align*} Następnie pokazali, że optymalne rozwiązanie programu (UP-PROBLEM) jest $1/3$-aproksymacją optymalnego rozwiązania (RH-PROBLEM). Ostatecznie ich rozwiązanie sprowadzało się do znalezienia optymalnego rozwiązania (UP-PROBLEM) za pomocą metody szukania wypukłego przepływu o minimalnym koszcie. Dodatkowo poczynili oni pewne założenia dotyczące rozkładu zmiennych $v_{c}$. W jednym wariancie założyli, że klient się zgodzi się na zaproponowaną cenę $\pi_{c}$ z prawdopodobieństwem: \begin{itemize} \item ReLU: \[ \pr{v_{c}\geq\pi_{c}}:=1-F_{c}^{ReLU}\br{\pi_{c}}=\begin{cases} 1 & \br{\pi_{c}<q_{c}}\\ -\frac{1}{\br{\alpha-1}\cdot q_{c}}\cdot\pi_{c}+\frac{\alpha}{\alpha-1} & \br{q_{c}\leq\pi_{c}\leq\alpha\cdot q_{c}}\\ 0 & \br{\pi_{c}>\alpha\cdot q_{c}} \end{cases} \] \item Sigmoid: \[ \pr{v_{c}\geq\pi_{c}}:=1-F_{c}^{Sigmoid}\br{\pi_{c}}=1-\frac{1}{1+e^{\frac{-\br{\pi_{c}-\beta\cdot q_{c}}}{\gamma\cdot|q_{c|}}}} \] \end{itemize} gdzie $\alpha,\beta,\gamma,q_{c}$to stałe a $q_{c}$ w powyższym modelu oznacza minimalną cenę, dla której klient na pewno się zgodzi. Funkcji postaci Sigmoidy możemy użyć gdy zależy nam by była ona różniczkowalna we wszystkich miejscach. W naszym modelu nie musimy wykonywać takich założeń. Wystarczy nam pewne, znacznie bardziej ogólne założenie, które przybliżymy w poniższej sekcji. \newpage \section{Rozkłady ewaluacji $v_{c}$} Aby można było użyć zaproponowanego przez nas rozwiązania potrzebujemy założenia, że funkcja $R_{c}\br{p_{c}}=F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}$ jest funkcją wklęsłą. W tej sekcji podamy intuicję co ta funkcja oznacza, zilustrujemy to na przykładzie dystrybuanty rozkładu ewaluacji $F_{c}$ typu ReLU, którą również zaproponowali Hikima~et.~al. w swojej pracy. Zdefiniujmy funkcję $R_{c}\br{p_{c}}=F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}$, w naszym rozwiązaniu będziemy proponować każdemu klientowi cenę $F_{c}^{-1}\br{1-p_{c}}$, czyli tak na prawdę cenę odpowiadającą kwantylowi rzędu $p_{c}$ rozkładu empirycznego cen. Przy takiej propozycji cen klient zgodzi się na nią z prawdopodobieństwem $p_{c}$ (Dowód Lematu \ref{lem:3}). Wtedy funkcja $R_{c}$ określa nam oczekiwany dochód z każdego klienta $c$. Rozważymy funkcję postaci ReLU z założeniami, że klient zgodzi się na przejazd z prawdopodobieństwem równym $1$ tylko dla ceny równej $0$ oraz każda $v_{c}\leq\pi_{c}^{max}$. Proponujemy poniższą, prostszą (dla ułatwienia zrozumienia) postać dystrybuanty dla każdego klienta $c$: \[ F_{c}\br{\pi_{c}}=\begin{cases} 0 & \br{\pi_{c}=0}\\ \frac{\pi_{c}}{\pi_{c}^{max}} & \br{0<\pi_{c}\leq\pi_{c}^{max}}\\ 1 & \br{\pi_{c}>\pi_{c}^{max}} \end{cases} \] \begin{figure}[H] \hfill{}% \begin{minipage}[t]{0.45\columnwidth}% \includegraphics[scale=0.6]{wykresy_pi/relu}\caption{Wykres $F_{c}\protect\br{\pi_{c}}$} % \end{minipage}% \begin{minipage}[t]{0.45\columnwidth}% \includegraphics[viewport=0bp 0bp 397bp 280bp,scale=0.6]{wykresy_pi/relu_inv}\caption{Wykres $F_{c}^{-1}\protect\br{p_{c}}$} % \end{minipage} \end{figure} \newpage \begin{figure}[H] \centering{}\caption{Wykres $R_{c}\protect\br{p_{c}}$} \includegraphics[scale=0.6]{wykresy_pi/R} \end{figure} Jak widać z wykresu $R_{c}\br{p_{c}}$ lub po prostu wyliczając jej postać, widzimy, że jest ona wklęsła i spełnia nasze założenie. W ogólności dystrybuanta $F_{c}$ nie musi być taka, że $R_{c}$ będzie wklęsła, ale nie będziemy się tym zajmować w tej pracy. Istnieje procedura nazywana \emph{żelazkowaniem}, która pozwala pominąć to założenie i uogólnia model. Użycie tej metody prezentował Qigi Yan w \cite{article}. \chapter{Nasze podejście} Hikima et al.~w swojej pracy (\cite{Hikima_Akagi_Kim_Kohjima_Kurashima_Toda_2021}) przedstawili rozwiązanie (UP-PROBLEM) za pomocą algorytmu minimalnych przepływów, osiągając rozwiązanie 3-aproksymacyjne. Zaproponujemy rozwiązanie o lepszej skuteczności (2-aproksymacja), używające drastycznie prostszego algorytmu. Ponadto, co nawet istotniejsze, Hikima~et~al.~porównywali swoje rozwiązanie do optymalnego algorytmu \emph{postowanych cen} (klientowi proponowana jest cena on ją odrzuca lub nie). Nasz algorytm porównywamy potem (Sekcja \ref{sec:Optymalizacja-wzgl=000119dem-optymalne}.) do optymalnej aukcji Bayesowskiej (klient proponuję cenę, my ją odrzucamy lub nie), która siłą rzeczy jest mechanizmem mocniejszym, ale nie możliwym do zaimplementowania w warunkach \emph{ride-hailingu}, tym mocniejszy jest jednak nasz wynik. \section{Problem} Chcemy rozwiązać problem propozycji cen przejazdów dla klientów tak by zoptymalizować oczekiwany zysk. Na potrzebę łatwiejszego zrozumienia dodamy i zmienimy niektóre oznaczenia. Każdemu klientowi będziemy proponować cenę $\pi_{c}$. Wagi krawędzi dalej oznaczamy przez $w_{c,t}$. Każdy klient $c$ ma własną ewaluację, na którą wycenia swój przejazd, oznaczymy ją przez \textbf{$v_{c}$}. Nie jest nam ona dana oczywiście wprost, ale zakładamy znajomość rozkładów ewaluacji dla każdego klienta, co jest sensownym założeniem, w realnym świecie rozkłady te możemy wyliczać na podstawie danych z poprzednich przejazdów, których przewoźnicy mają wystarczająco dużo. \newpage W naszym modelu klient zgadza się na przejazd wtedy i tylko wtedy gdy $v_{c}\geq\pi_{c}$, dzieje się to z prawdopodobieństwem $\pr{v_{c}\geq\pi_{c}}=1-F_{c}\br{\pi_{c}}$, które znamy lub możemy szybko policzyć na podstawie dystrybuanty przybliżonego rozkładu ewaluacji $F_{c}$. Przez $p_{c,t}\forall_{\br{c,t}\in E}$ oznaczymy prawdopodobieństwo tego, że rozważymy dla klienta $c$ przejazd taksówką $t$ (jeżeli $c$ zgodzi się na cenę), a przez $p_{c}=\sum_{t\in\delta\br c}p_{c,t}$, prawdopodobieństwo, że obsłużymy klienta $c$ (jeśli zgodzi się na zaproponowaną cenę). Przez zysk rozumiemy oczywiście sumę $\pi_{c}-w_{c,t}$ dla tych klientów $c$, których przejazdy obsługujemy. Skoro tak na prawdę dalej budujemy skojarzenie na grafie dwudzielnym dobrze myśleć o problemie \emph{ride-hailingu} analogicznie. Przez dodanie krawędzi $\br{c,t}$ będziemy rozumieć pomyślne skojarzenie klienta $c$ z taksówką $t$ (klient $c$ jedzie do miejsca docelowego taksówką $t$). Powiemy, że krawędź $\br{c,t}$ jest \emph{zablokowana} przez\emph{ }$t$, jeśli taksówka $t$ została pomyślnie skojarzona z innym klientem i obsługuje już jego przejazd. \section{Program liniowy} Pokażemy, że rozwiązanie poniższego programu liniowego jest górnym ograniczeniem problemu \emph{ride-hailingu}. Co więcej, nie jest to nawet ograniczenie optymalnego problemu ustalania cen, ale jest to ograniczenie górne na wynik optymalnej aukcji Bayesowskiej (Sekcja \ref{sec:Optymalizacja-wzgl=000119dem-optymalne}.). Program jest inspirowany wynikiem Qiqi Yana~\cite{article}: \begin{align} \max & \sum_{c}\br{F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}}-\sum_{\br{c,t}\in E}p_{c,t}\cdot w_{c,t}\qquad\text{(PRICE-MATCH-LP)}\nonumber \\ \text{s.t.\ensuremath{\quad}} & \sum_{t\in\delta\br c}p_{c,t}\leq1\qquad\forall_{c}\label{eq:lp_1}\\ & \sum_{c\in\delta\br t}p_{c,t}\leq1\qquad\forall_{t}\label{eq:lp_2}\\ & p_{c}=\sum_{t\in\delta\br c}p_{c,t}\qquad\forall_{c} \end{align} \begin{thm} \emph{\label{thm:(PRICE-MATCH-LP)-upper_bound_opt}}Rozwiązanie\emph{ }\textup{(PRICE-MATCH-LP)}\textup{\emph{ jest górnym ograniczeniem $OPT$ (aukcji postowanych cen).}} \begin{proof} Rozważmy optymalny mechanizm (w modelu aukcji postowanych cen), pokażemy, że $p_{c,t}^{*}=\pr{OPT\text{\,przewozi }c\text{ taksówką }t}$ jest dopuszczalnym rozwiązaniem. W następnym kroku pokażemy, że optymalny mechanizm, średnio na kliencie $c$ nie zarobi, więcej jak $R_{c}\br{p_{c}^{*}}=F_{c}^{-1}\br{1-p_{c}^{*}}\cdot p_{c}^{*}$ \newpage Rozwiązanie $OPT$ musi spełniać (\ref{eq:lp_1}) i (\ref{eq:lp_2}), ponieważ $OPT$ odpowiada pewnemu średniemu skojarzeniu a spełnienie (\ref{eq:lp_1}) i (\ref{eq:lp_2}) to warunek konieczny i wystarczający\textcolor{red}{{} }średniego skojarzenia, stąd $p_{c,t}^{*}$ jest dopuszczalnym rozwiązaniem. Kiedy $OPT$ ma ustalone ceny $\pi_{c}$ dla każdego klienta $c$ (na przejazd $t$) to zgadza się on na nią z prawdopodobieństwem $\pr{v_{c}\geq\pi_{c}}=1-F_{c}\br{\pi_{c}}$. Pokażemy, że $\ex{OPT\br c}$ czyli średni uzysk $OPT$-a na kliencie $c$ jest nie większy niż $F_{c}^{-1}\br{1-p_{c}^{*}}\cdot p_{c}^{*}$. Wiemy, że \begin{align*} \ex{OPT\br c} =&\pi_{c}\cdot\pr{c\text{ zgadza się na }\pi_{c}\text{ ORAZ }OPT\text{ przewozi }c} \\ =& \pi_{c}\cdot\pr{v_{c}\geq\pi_{c}}\cdot\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}. \end{align*} Ale jednocześnie $\pi_{c}=F_{c}^{-1}\br{1-\pr{v_{c}\geq\pi_{c}}}$, a więc: \begin{align*} \ex{OPT\br c} & =\pi_{c}\cdot\pr{v_{c}\geq\pi_{c}}\cdot\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}\\ & =F_{c}^{-1}\br{1-\pr{v_{c}\geq\pi_{c}}}\cdot\pr{v_{c}\geq\pi_{c}}\cdot\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}\\ & \leq F_{c}^{-1}\br{1-\pr{v_{c}\geq\pi_{c}}\cdot\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}}\cdot\pr{v_{c}\geq\pi_{c}}\cdot\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}\\ & =R_{c}^{*}\br{\pr{v_{c}\geq\pi_{c}}\cdot\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}}\\ & =R_{c}^{*}\br{p_{c}^{*}}, \end{align*} co wynika z tego, że funkcja $F_{c}^{-1}\br{\cdot}$ jest monotoniczna, a $\prcond{OPT\text{ przewozi }c}{v_{c}\geq\pi_{c}}\leq1$. \end{proof} \end{thm} \newpage \begin{thm} \label{thm:Program-(PRICE-MATCH-LP)-mo=00017Cemy}Program \textup{(PRICE-MATCH-LP) }\textup{\emph{możemy rozwiązać efektywnie o ile $R_{c}$ jest wklęsła.}} \end{thm} \begin{proof} Rozważmy funkcję $R_{c}\br{p_{c}}=F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}$ (dla $p_{c}\in\brq{0,1}$) . Z definicji przyjętej przez nas postaci $F_{c}$ otrzymujemy $R_{c}\br{p_{c}}=F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}=q_{c}^{max}\cdot\br{1-p_{c}}\cdot p_{c}$. Ta funkcja jest oczywiście wklęsła, stąd funkcja celu (PRICE-MATCH-LP) jest wklęsła (odejmowane liniowe składniki nie zaburzają tej własności). Zatem jej maksymalizacja po wypukłym obszarze (tj. obszarze skojarzeń zdefiniowanych przez (\ref{eq:lp_1}) i (\ref{eq:lp_2})) jest możliwa w czasie wielomianowym, na przykład \emph{metodą elipsoid }przedsawioną w \cite{Elipsoid} \end{proof} \section{Algorytm} Na podstawie (PRICE-MATCH-LP) proponujemy poniższy algorytm, który będzie dawał 2-aproksymacyjne rozwiązanie problemu \emph{ride-hailingu}: \begin{algorithm}[H] \caption{\label{alg:algos}} \textbf{For each }client $c$ in random order: \textbf{$\quad$propose $c$ }price \textbf{$\pi_{c}=F_{c}^{-1}\br{1-p_{c}}$} $\quad$\textbf{if} $c$ accepts price $\pi_{c}$: $\quad\quad$\textbf{pick} taxi $t$ with propability $\frac{p_{c,t}}{p_{c}}$ $\quad\quad$\textbf{if $\br{c,t}$} is not blocked: $\quad\quad\quad$\textbf{serve $c$ }with taxi $t$ for price $\pi_{c}$ \end{algorithm} \section{Uzasadnienie 2-aproksymacji} \begin{lem} \label{lem:3}Krawędź $\br{c,t}$ jest zablokowana przez $t$ z prawdopodobieństwem co najwyżej $\frac{1}{2}$. \end{lem} \begin{proof} Krawędź $\br{c,t}$ będzie zablokowana przez $t$ wtedy i tylko wtedy, gdy taksówka $t$ została \emph{skojarzona }już z innym klientem $\prm c$, wtedy powiemy, że $\br{c,t}$ jest zablokowana przez $\br{\prm c,t}$. Klient $\prm c$ został skojarzony z taksówką $t$ tylko wtedy gdy algorytm rozważył klienta $\prm c$ przed $c$, $\prm c$ zgodził się na zaproponowaną mu cenę i algorytm zaproponował taksówkę $t$ klientowi $\prm c$. Z konstrukcji algorytmu, klientów rozważamy w losowej kolejności stąd prawdopodobieństwo, że $\prm c$ wystąpi przed $c$ w losowej permutacji dla ustalonego $c$ wynosi $\frac{1}{2}$. Proponujemy cenę $\pi_{c}=F_{c}^{-1}\br{1-p_{c}}$ natomiast $\prm c$ zgadza się na nią z prawdopodobieństwem: \[ \pr{v_{\prm c}\geq\pi_{\prm c}}=1-\pr{v_{\prm c}\leq\pi_{\prm c}}=1-F_{\prm c}\br{\pi_{\prm c}}=1-F_{\prm c}\br{F_{\prm c}^{-1}\br{1-p_{\prm c}}}=p_{\prm c} \] \newpage Jeżeli $\prm c$ zgodzi się na cenę to przydzielimy mu taksówkę $t$ z prawdopodobieństwem $\frac{p_{\prm c,t}}{p_{\prm c}}$. Wobec powyższego krawędź $\br{c,t}$ zostanie zablokowana przez $\br{\prm c,t}$ z prawdopodobieństwem: \[ \pr{\br{c,t}\text{is blocked by }\text{\ensuremath{\br{\prm c,t}}}}\leq\frac{1}{2}\cdot p_{\prm c}\cdot\frac{p_{\prm c,t}}{p_{\prm c}}=\frac{1}{2}\cdot p_{\prm c,t} \] \\ Dla ustalonego klienta $c$ i taksówki $t$, krawędź $\br{c,t}$ będzie zablokowana gdy będzie zablokowana przez jakąkolwiek z krawędzi $\br{\prm c,t}\forall_{\prm c\in\delta\br t\setminus\set c}$, z dowolności wyboru $\prm c$ w powyższym rozważaniu otrzymujemy ostatecznie: \[ \pr{\br{c,t}\text{is blocked by }t}\leq\sum_{\prm c\in\delta\br t}\pr{\br{c,t}\text{is blocked by }\text{\ensuremath{\br{\prm c,t}}}}\leq\frac{1}{2}\cdot\sum_{\prm c\in\delta\br t}p_{\prm c,t}\leq\frac{1}{2} \] \\ Przy czym ostatnia nierówność wynika z (\ref{eq:lp_2}) w (PRICE-MATCH-LP), a przedostatnia to po prostu wyciągnięcie stałej przed sumę.\\ \end{proof} \newpage \begin{thm} \textup{\label{thm:Algorytm--oblicza-2apro}Algorytm (\ref{alg:algos}) oblicza 2-aproksymację $OPT$.} \end{thm} \begin{proof} Z Twierdzenia (\ref{thm:(PRICE-MATCH-LP)-upper_bound_opt}) wiemy, że $OPT$ (PRICE-MATCH-LP) jest górnym ograniczeniem problemu \emph{ride-hailingu} w modelu aukcji Bayesowskiej. Pokażemy, że $\frac{OPT}{2}$ jest dolnym ograniczeniem $ALG$, (wynik Algorytmu (\ref{alg:algos})). Przez $p_{c,t}$ oznaczmy prawdopodobieństwo z jaką $OPT$ rozważy $\br{c,t}$. Obliczmy oczekiwany zysk $ALG$ określonego przez wartości $p_{c,t}$. Z rozważań w dowodzie Lematu (\ref{lem:3}) wiemy, że prawdopodobieństwo, tego że klient $c$ zgodzi się na cenę $F_{\prm c}^{-1}\br{1-p_{\prm c}}$ wynosi $p_{c}$, stąd i z konstrukcji algorytmu otrzymujemy: \begin{align} ALG & =\sum_{c}\br{\sum_{t\in\delta\br c}p_{c}\cdot\frac{p_{c,t}}{p_{c}}\cdot\pr{\br{c,t}\text{ is not blocked by }t}\cdot\br{F_{\prm c}^{-1}\br{1-p_{\prm c}}-w_{c,t}}}\geq\label{eq:1}\\ \geq & \sum_{c}\br{\sum_{t\in\delta\br c}p_{c,t}\cdot\frac{1}{2}\cdot\br{F_{\prm c}^{-1}\br{1-p_{\prm c}}-w_{c,t}}}=\label{eq:2}\\ = & \frac{1}{2}\sum_{c}\br{\sum_{t\in\delta\br c}p_{c,t}\cdot F_{\prm c}^{-1}\br{1-p_{\prm c}}-\sum_{t\in\delta\br c}p_{c,t}\cdot w_{c,t}}=\\ = & \frac{1}{2}\brq{\sum_{c}\br{F_{\prm c}^{-1}\br{1-p_{\prm c}}\cdot\sum_{t\in\delta\br c}p_{c,t}}-\sum_{\br{c,t}\in E}p_{c,t}\cdot w_{c,t}}=\\ = & \frac{1}{2}\brq{\sum_{c}\br{F_{\prm c}^{-1}\br{1-p_{\prm c}}\cdot p_{c}}-\sum_{\br{c,t}\in E}p_{c,t}\cdot w_{c,t}}=\frac{OPT}{2} \end{align} \\ przy czym przejście między (\ref{eq:1}) a (\ref{eq:2}) wynika z Lematu (\ref{lem:3}). \end{proof} \chapter{\label{sec:Optymalizacja-wzgl=000119dem-optymalne}Porównanie do optymalnego mechanizmu aukcji \emph{Bayesowskiej}} Istnieje bardzo bogata teoria dotycząca tworzenia efektywnych mechanizmów sprzedaży. Wśród niej jednym z głównych wyników jest teoria Myersona~\cite{Myerson}, za którą Myerson otrzymał nagrodę Nobla. Teoria Myersona pozwala na stworzenie mechanizmu przydziału klientów do taksówek, który w \emph{optymalny} sposób maksymalizuje zysk przewoźnika. Poniżej krótko przedstawiamy jak wygląda mechanizm Myersona w przypadku problemu \emph{ride-hailingu}. \section{Mechanizm Myersona} Formalnie, rozważamy mechanizm aukcji \emph{Bayesowskiej} z jednym sprzedawcą (systemem ride-hailingowym) i $n$ uczestnikami z \emph{jednym parametrem}, którzy licytują usługę (w tym przypadku przejazd). \emph{Jeden parametr} oznacza, że z każdym klientem $c$ jest związana jego prywatna informacja reprezentowana przez $v_{c}$, jedna liczba, która jest jego ewaluacją ceny. Ceny są losowe i niezależne między sobą i zakładamy, że pochodzą ze znanych rozkładów $\mathcal{D}_{c}$ dla każdego klienta $c$. Ewaluacje nie są jawne, ale rozkłady $\mathcal{D}_{c}$ już tak. Każdy klient $c$ składa \emph{ofertę }$b_{c}$ reprezentującą jego ewaluacje. Sprzedawca ma ograniczenie na obsługę klientów $\mathcal{I}\subseteq2^{\brq n}$ i może obsłużyć dowolny zbiór agentów z $\mathcal{I}$ --- naszym przypadku $\mathcal{I}$ reprezentuje warunek, że każdy klient musi być skojarzony z co najwyżej jedną taksówką, a taksówka może przewieźć co najwyżej jednego klienta, tj. reprezentuje skojarzenia w grafie. \newpage Mechanizm jest funkcją, która odwzorowuje wektor \emph{ofert}\textbf{ }$\boldsymbol{b}$ na \emph{alokację} $A\br{\boldsymbol{b}}\in\mathcal{I}$, z \emph{cenami} $\pi_{c}\br{\boldsymbol{b}}$ płaconymi przez każdego klienta $c$. Dla ułatwienia notacji definiujemy przez $X_{c}\br{\boldsymbol{b}}:=\boldsymbol{1}_{c\in A\br{\boldsymbol{b}}}$ funkcję, która określa czy mechanizm obsługuje agenta $c$. \emph{Zysk} każdego klienta $c$ pod warunkiem wektora \emph{ofert} \textbf{$\boldsymbol{b}$}, określamy przez $v_{c}\cdot X_{c}\br{\boldsymbol{b}}-\pi_{c}\br{\boldsymbol{b}}$. Mechanizmy rozważane przez Myersona spełniają następujące założenia: \begin{itemize} \item \emph{Dobrowolny udział}: klient płaci tylko wtedy gdy go obsługujemy i robimy to za cenę równą co najwyżej złożonej przez niego \emph{ofercie}. Dla każdego wektora składanych \emph{ofert} $\boldsymbol{b}$ mamy, $\pi_{c}\br{\boldsymbol{b}}\leq X_{c}\br{\boldsymbol{b}}\cdot b_{c}\quad\forall_{c}$. \item \emph{Transfer w jedną stronę}: mechanizm nie płaci klientom, $\pi_{c}\br{\boldsymbol{b}}\geq0\quad\forall_{c}$. \item \emph{Oczekiwana prawdomówność}: dla każdego klienta $c$, jeżeli $v_{c}$ jest jego prawdziwą ewaluacją, wtedy złożenie \emph{oferty} $v_{c}$ daje oczekiwany \emph{zysk} nie mniejszy niż przy złożeniu jakiejkolwiek innej \emph{oferty} $b_{c}$: \[ \exls{b_{\prm c}\leftarrow\mathcal{D}_{\prm c}:\prm c\neq c}{v_{c}\cdot X_{i}\br{\boldsymbol{b}_{-c},v_{c}}-\pi_{c}\br{\boldsymbol{b}_{-c},v_{c}}}\geq\exls{b_{\prm c}\leftarrow\mathcal{D}_{\prm c}:\prm c\neq c}{v_{c}\cdot X_{i}\br{\boldsymbol{b}_{-c},b_{c}}-\pi_{c}\br{\boldsymbol{b}_{-c},b_{c}}} \] \end{itemize} \section{Myerson a ride-hailing} Jednakże gdyby system ride-hailingowy chciał skorzystać z tego mechanizmu to zupełnie zmieniłby on sposób działania aplikacji --- użytkownik zamiast akceptawać cenę, musiałby najpierw zaproponować własną cenę za przejazd, a następnie czekać na potwierdzenie systemu, czy ta cena jest akceptowalna czy nie, a nawet jeśli jest akceptowalna, to czy przejazd się odbędzie. Siłą rzeczy więc jesteśmy (tzn. przewoźnik jest) skazani na mechanizm postowanych cen, czyli taki jak rozważaliśmy wcześniej. Powstaje jednak naturalne pytanie:\\ \centerline{ \emph { Jak efektywny jest nasz mechanizm w porównaniu z optymalnym mechanizmem Myersona?\newline } } ~\\ \newpage Główne twierdzenie niniejszej pracy jest więc następujące: \begin{thm} Algorytm~\ref{alg:algos} jest mechanizmem dla problemu ride-hailingu, który jest 2-aproksymacją optymalnego mechanizmu Bayesowskiego wg. teorii Myersona. \end{thm} Dowód tego twierdzenia sprowadza się jednak dość prosto do następującego lematu. \begin{lem} Rozwiązanie\emph{ }\textup{(PRICE-MATCH-LP)}\textup{\emph{ jest górnym ograniczeniem wartości optymalnej aukcji Bayesowskiej.}} \end{lem} Przypomnijmy więc (PRICE-MATCH-LP): \begin{align} \max & \sum_{c}\br{F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}}-\sum_{\br{c,t}\in E}p_{c,t}\cdot w_{c,t}\qquad\text{(PRICE-MATCH-LP)}\nonumber \\ \text{s.t.\ensuremath{\quad}} & \sum_{t\in\delta\br c}p_{c,t}\leq1\qquad\forall_{c}\\ & \sum_{c\in\delta\br t}p_{c,t}\leq1\qquad\forall_{t}\\ & p_{c}=\sum_{t\in\delta\br c}p_{c,t}\qquad\forall_{c} \end{align} \begin{proof} Rozważmy optymalny mechanizm Bayesowski $OPT$. Niech $OPT(c)$ to będzie zysk mechanizmu z klienta $c$. Załóżmy, że $p_{c}$ to prawdopodobieństwo, że $OPT$ przewozi klienta $c$, a $p_{c,t}$ to prawdopodobieństwo, że mechanizm przewozi klienta $c$ taksówką $t$. Oczywiście te prawdopodobieństwa spełniają nierówności powyższego programu liniowego. Koszt jaki optymalny mechanizm płaci za przewóz klienta $c$ taksówką $t$ to $p_{c,t}\cdot w_{c,t}$. Pozostaje więc pokazać jedynie, że \[ \sum_{c}\ex{OPT\br c}\leq\sum_{c}\br{F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}}. \] Myerson w swojej pracy~\cite{Myerson} pokazał, że jeśli $\pr{OPT\text{ przewozi }c}=p_{c}$, to $\ex{OPT\br c}\leq\br{F_{c}^{-1}\br{1-p_{c}}\cdot p_{c}}$ dla każdego klienta $c$. To oznacza ostatecznie, że wektor $\br{p_{c}}_{c\in C}=\br{\pr{OPT\text{ przewozi }c}}_{c\in C}$ jest rozwiązaniem dopuszczalnym programu (PRICE-MATCH-LP) o wartości nie mniejszej niż wartość $\ex{OPT}$, co kończy dowód. \end{proof} Wobec powyższego lematu oraz z Twierdzenia \ref{thm:Algorytm--oblicza-2apro}, Algorytm \ref{alg:algos} oblicza 2-aproksymację porównując do optymalnego mechanizmu aukcji \emph{Bayesowskiej.} \chapter{Podsumowanie i otwarty problem} W powyższej pracy zaprezentowaliśmy rozwiązanie problemu \emph{ride-hailingu}. Przedstawiliśmy podejście i rozwiązanie tego problemu autorstwa Hikimy et. al, którzy osiągnęli 3-aproksymację porównując do mechanizmu aukcji postowanych cen. Następnie pokazaliśmy Algorytm \ref{alg:algos}, osiągający 2-aproksymację (PRICE-MATCH-LP) porównując do mechanizmu aukcji bayesowskiej co zostało pokazane w Sekcji \ref{sec:Optymalizacja-wzgl=000119dem-optymalne}. W bogatej literaturze dotyczącej optymalizacji stochastycznej pojawia się wiele wyników, które wskazują na to, że możliwym jest, aby uzyskać mechanizm $\br{1-\frac{1}{e}}$-aproksymacyjny korzystając z faktu, że struktura kombinatoryczna, na której pracujemy to skojarzenia. Pozostawiamy więc otwartym pytanie, czy da się poprawić 2-aproksymację na $\br{1-\frac{1}{e}}$-aproksymację. \bibliographystyle{plain} \bibliography{maurycy} \end{document}
+
+
+Thought for 12 seconds
+The paper formulates the ride-hailing pricing problem as the (UP-PROBLEM), a mixed-integer linear program that looks like this
+max
+⁡
+  
+{
+π
+c
+}
+c
+∈
+C
+⊆
+R
++
+  
+max
+⁡
+  
+z
+c
+,
+t
+∈
+{
+0
+,
+1
+}
+
+  
+  
+∑
+(
+c
+,
+t
+)
+∈
+E
+(
+π
+c
+−
+w
+c
+,
+t
+)
+ 
+z
+c
+,
+t
+s.t.
+
+
+∑
+t
+∈
+δ
+(
+c
+)
+z
+c
+,
+t
+  
+≤
+  
+Pr
+⁡
+[
+v
+c
+≥
+π
+c
+]
+
+∀
+c
+∈
+C
+
+
+∑
+c
+∈
+δ
+(
+t
+)
+z
+c
+,
+t
+  
+≤
+  
+1
+
+∀
+t
+∈
+T
+
+
+z
+c
+,
+t
+∈
+{
+0
+,
+1
+}
+
+∀
+(
+c
+,
+t
+)
+∈
+E
+.
+\begin{aligned} \max_{\;\{\pi_c\}_{c\in C}\subseteq\mathbb{R}_{+}}\; \max_{\;z_{c,t}\in\{0,1\}} &\;\;\sum_{(c,t)\in E} (\pi_c-w_{c,t})\,z_{c,t} \\[4pt] \text{s.t.}\qquad &\sum_{t\in\delta(c)} z_{c,t}\;\le\;\Pr[v_c\ge\pi_c] \quad\forall c\in C\\ &\sum_{c\in\delta(t)} z_{c,t}\;\le\;1 \quad\forall t\in T\\ &z_{c,t}\in\{0,1\}\quad\forall (c,t)\in E . \end{aligned}
+{πc }c∈C ⊆R+ max zc,t ∈{0,1}max s.t. (c,t)∈E∑ (πc −wc,t )zc,t t∈δ(c)∑ zc,t ≤Pr[vc ≥πc ]∀c∈Cc∈δ(t)∑ zc,t ≤1∀t∈Tzc,t ∈{0,1}∀(c,t)∈E.
+	•	Decision variables
+	◦	π c   \pi_c  πc – continuous price offered to client c  c  c.
+	◦	z c , t   ∈ { 0 , 1 }  z_{c,t}\in\{0,1\}  zc,t ∈{0,1} – binary variable indicating whether client c  c  c is matched to taxi t  t  t.
+	•	Objective Maximise total expected profit, i.e. prices earned minus travel costs on the chosen matches.
+	•	Constraints
+	1	A client can be matched at most with probability equal to her acceptance probability Pr ⁡ [ v c  ≥ π c  ]  \Pr[v_c\ge\pi_c]  Pr[vc ≥πc ].
+	2	Each taxi can serve at most one client.
+Because the matching variables are binary while the prices are continuous, the model is a mixed-integer linear program (MILP). Hikima et al. show that solving this MILP (they call it the Upper-bound Problem, UP-PROBLEM) gives a 3-approximation to the original stochastic optimisation task, and they compute its optimum by reducing it to a minimum-cost flow problem with convex arc costs.
+
+You said:
+I need a convex program based on Myerson
+
+ChatGPT said:
+
+Thought for 29 seconds
+Below is a clean “convex-Myerson” formulation for the ride-hailing setting you described. It works for one-parameter, independent values and regular (or ironed-regular) distributions, so the revenue curves are concave. Everything is ex-ante, so the program has only
+O
+(
+∣
+C
+∣
++
+∣
+E
+∣
+)
+O(|C|+|E|)
+O(∣C∣+∣E∣) variables.
+
+1. Pre-processing: the Myerson revenue curve
+For every rider
+c
+c
+c
+	•	let F c   F_c  Fc be the CDF of the value v c   v_c  vc 
+	•	let f c   f_c  fc be its PDF (or PMF, if discrete)
+	•	define the (possibly ironed) virtual value φ c  ( v ) = v − 1 − F c  ( v )  f c  ( v )   .  \varphi_c(v)=v-\frac{1-F_c(v)}{f_c(v)} .   φc (v)=v−fc (v)1−Fc (v) .
+From
+φ
+c
+\varphi_c
+φc build the revenue curve
+R
+c
+(
+p
+)
+  
+=
+  
+∫
+0
+p
+ 
+φ
+c
+(
+F
+c
+−
+1
+(
+1
+−
+u
+)
+)
+ 
+d
+u
+,
+
+p
+∈
+[
+0
+,
+1
+]
+.
+R_c(p)\;=\;\int_{0}^{p}\,\varphi_c\bigl(F_c^{-1}(1-u)\bigr)\,du, \qquad p\in[0,1].
+Rc (p)=∫0p φc (Fc−1 (1−u))du,p∈[0,1].
+For regular distributions
+R
+c
+R_c
+Rc is already concave; if not, iron
+φ
+c
+\varphi_c
+φc first and the integral is concave as well.
+
+2. Decision variables
+symbol
+meaning
+domain
+p
+c
+,
+t
+p_{c,t}
+pc,t
+ex-ante probability that we serve rider
+c
+c
+c with taxi
+t
+t
+t
+[
+0
+,
+1
+]
+[0,1]
+[0,1]
+p
+c
+p_c
+pc
+total probability that rider
+c
+c
+c is served
+p
+c
+=
+∑
+t
+∈
+δ
+(
+c
+)
+p
+c
+,
+t
+p_c=\sum_{t\in\delta(c)}p_{c,t}
+pc =∑t∈δ(c) pc,t
+
+3. Convex-Myerson program
+maximize
+
+
+∑
+c
+∈
+C
+R
+c
+(
+p
+c
+)
+  
+−
+  
+∑
+(
+c
+,
+t
+)
+∈
+E
+w
+c
+,
+t
+ 
+p
+c
+,
+t
+subject to
+
+
+∑
+t
+∈
+δ
+(
+c
+)
+p
+c
+,
+t
+  
+=
+  
+p
+c
+
+
+
+∀
+ 
+c
+∈
+C
+
+
+∑
+c
+∈
+δ
+(
+t
+)
+p
+c
+,
+t
+  
+≤
+  
+1
+
+
+
+∀
+ 
+t
+∈
+T
+
+
+0
+  
+≤
+  
+p
+c
+,
+t
+  
+≤
+  
+1
+
+
+
+∀
+ 
+(
+c
+,
+t
+)
+∈
+E
+.
+\begin{aligned} \text{maximize} \quad & \sum_{c\in C} R_c(p_c) \;-\; \sum_{(c,t)\in E} w_{c,t}\,p_{c,t} \\[6pt] \text{subject to}\quad & \sum_{t\in\delta(c)} p_{c,t} \;=\; p_c \quad &&\forall\,c\in C\\[4pt] & \sum_{c\in\delta(t)} p_{c,t} \;\le\; 1 \quad &&\forall\,t\in T\\[4pt] & 0\;\le\; p_{c,t}\;\le\;1 \quad &&\forall\,(c,t)\in E . \end{aligned}
+maximizesubject to c∈C∑ Rc (pc )−(c,t)∈E∑ wc,t pc,t t∈δ(c)∑ pc,t =pc c∈δ(t)∑ pc,t ≤10≤pc,t ≤1 ∀c∈C∀t∈T∀(c,t)∈E.
+
+Why this is exactly Myerson’s objective
+	•	For any rider c  c  c that we end up serving with ex-ante probability p c   p_c  pc , Myerson’s expected payment equals R c  ( p c  )  R_c(p_c)  Rc (pc ) (this is the usual payment-identity for single-parameter BIC mechanisms).
+	•	The cost term ∑ w c , t   p c , t    \sum w_{c,t}p_{c,t}  ∑wc,t pc,t subtracts the expected driving cost.
+	•	Because R c  ( ⋅ )  R_c(\cdot)  Rc (⋅) is concave and the constraints are linear, the whole program is a convex optimisation problem. Standard solvers (projected sub-gradient, interior-point, etc.) converge in polynomial time.
+
+Recovering an explicit mechanism
+	1	Solve the convex program to get optimal probabilities { p c , t  ⋆  }  \{p_{c,t}^\star\}  {pc,t⋆ }.
+	2	Convert them into an ironed virtual-value matching rule (similar to Kelly-randomisation):
+	◦	In each round draw a random permutation of riders.
+	◦	Sequentially offer rider c  c  c a price threshold π c  = F c − 1   ( 1 − p c ⋆  )  \pi_c = F_c^{-1}(1-p_c^\star)  πc =Fc−1 (1−pc⋆ ).
+	◦	If she accepts, pick taxi t  t  t with probability p c , t  ⋆  / p c ⋆   p_{c,t}^\star/p_c^\star  pc,t⋆ /pc⋆ ; match if still free.
+	◦	Myerson payments are guaranteed by the construction of R c   R_c  Rc .
+	3	The expected revenue of this mechanism matches the optimum of the convex program, hence achieves the Myerson upper bound.
+
+Remarks & variants
+	•	Discrete values – If each v c   v_c  vc has a finite support { v c 1   , … , v c m   }  \{v_{c1},\dots,v_{cm}\}  {vc1 ,…,vcm }, you can tabulate φ c   \varphi_c  φc and compute R c   R_c  Rc exactly with a prefix-sum; no integration needed.
+	•	Irregular distributions – Iron φ c   \varphi_c  φc first (take the convex envelope of the revenue curve); the same program then stays convex.
+	•	Multiple daily batches – Add a right-hand-side κ t   \kappa_t  κt in the second constraint to model a taxi that can do κ t   \kappa_t  κt trips per horizon.
+	•	Solver friendliness – If you prefer an LP, sample or quantise the probability axis, linearise R c   R_c  Rc with cutting-planes, or keep the integral form when R c   R_c  Rc is piecewise-linear (common after ironing).
+This convex program is the standard Myerson formulation stripped to its essentials for the ride-hailing bipartite-matching setting, and is ready to drop into any convex solver.
+
+You said:
+
+1302.5913v1.pdf
+PDF
+
+
+awesome, but here's the thing this is a convex program so it aint easy to impelment read the following paper by gupta and nagarajan that i attach, and please give me a linear program variant that is based on Gupta's and Nagarajans reduction from convex program to linear program
+
+ChatGPT said:
+
+Thought for 30 seconds
+Turning the concave Myerson program into a pure linear program
+Gupta & Nagarajan’s key trick is to replace every concave “revenue-curve” term
+R
+c
+(
+p
+c
+)
+=
+F
+c
+−
+1
+(
+1
+−
+p
+c
+)
+ 
+p
+c
+R_c(p_c)=F_c^{-1}(1-p_c)\,p_c
+Rc (pc )=Fc−1 (1−pc )pc by a menu of linear slices—one slice for every posted-price that could be shown to a rider. Doing this (and keeping one copy of every rider-taxi pair for every price) converts the whole problem into the kind of linear probing LP they analyse. Below is the LP obtained by applying that reduction to the convex program you wrote earlier.
+
+1. Discretise prices
+For each rider
+c
+c
+c fix a finite price grid
+Π
+c
+⊆
+[
+0
+,
+π
+c
+max
+⁡
+]
+\Pi_c\subseteq[0,\pi^{\max}_c]
+Πc ⊆[0,πcmax ] (e.g. all integer złoty, or quantiles). For a grid point
+π
+∈
+Π
+c
+\pi\in\Pi_c
+π∈Πc let
+p
+c
+(
+π
+)
+  
+=
+  
+Pr
+⁡
+[
+v
+c
+≥
+π
+]
+p_{c}(\pi)\;=\;\Pr[v_c\ge\pi]
+pc (π)=Pr[vc ≥π]
+be the acceptance probability.
+
+2. Variables
+variable
+meaning
+y
+c
+,
+π
+∈
+[
+0
+,
+1
+]
+y_{c,\pi}\in[0,1]
+yc,π ∈[0,1]
+probability we offer price
+π
+\pi
+π to rider
+c
+c
+c (probing decision)
+x
+c
+,
+t
+,
+π
+∈
+[
+0
+,
+1
+]
+x_{c,t,\pi}\in[0,1]
+xc,t,π ∈[0,1]
+probability rider
+c
+c
+c accepts
+π
+\pi
+π and is matched to taxi
+t
+t
+t
+
+3. LP
+maximise
+
+
+∑
+c
+∈
+C
+∑
+π
+∈
+Π
+c
+∑
+t
+∈
+δ
+(
+c
+)
+(
+π
+−
+w
+c
+,
+t
+)
+ 
+x
+c
+,
+t
+,
+π
+subject to
+
+
+∑
+π
+∈
+Π
+c
+y
+c
+,
+π
+  
+≤
+  
+1
+∀
+ 
+c
+
+(offer at most one price)
+
+
+∑
+t
+∈
+δ
+(
+c
+)
+x
+c
+,
+t
+,
+π
+  
+≤
+  
+p
+c
+(
+π
+)
+ 
+y
+c
+,
+π
+∀
+ 
+c
+,
+π
+
+(can match only accepted riders)
+
+
+∑
+c
+∈
+C
+∑
+π
+∈
+Π
+c
+x
+c
+,
+t
+,
+π
+  
+≤
+  
+1
+∀
+ 
+t
+
+(each taxi used once)
+
+
+y
+c
+,
+π
+,
+ 
+x
+c
+,
+t
+,
+π
+  
+≥
+  
+0
+∀
+ 
+c
+,
+π
+,
+t
+
+\begin{aligned} \text{maximise}\quad & \sum_{c\in C}\sum_{\pi\in\Pi_c}\sum_{t\in\delta(c)} (\pi-w_{c,t})\,x_{c,t,\pi} \\[4pt] \text{subject to}\quad & \sum_{\pi\in\Pi_c} y_{c,\pi} \;\le\; 1 &\forall\,c &&\text{(offer at most one price)} \\[6pt] & \sum_{t\in\delta(c)} x_{c,t,\pi} \;\le\; p_{c}(\pi)\,y_{c,\pi} &\forall\,c,\pi &&\text{(can match only accepted riders)}\\[6pt] & \sum_{c\in C}\sum_{\pi\in\Pi_c} x_{c,t,\pi} \;\le\; 1 &\forall\,t &&\text{(each taxi used once)}\\[6pt] & y_{c,\pi},\,x_{c,t,\pi}\;\ge\;0 &\forall\,c,\pi,t & \end{aligned}
+maximisesubject to c∈C∑ π∈Πc ∑ t∈δ(c)∑ (π−wc,t )xc,t,π π∈Πc ∑ yc,π ≤1t∈δ(c)∑ xc,t,π ≤pc (π)yc,π c∈C∑ π∈Πc ∑ xc,t,π ≤1yc,π ,xc,t,π ≥0 ∀c∀c,π∀t∀c,π,t (offer at most one price)(can match only accepted riders)(each taxi used once)
+	•	Linear objective. The expected revenue from any triple ( c , t , π )  (c,t,\pi)  (c,t,π) is ( π − w c , t   ) x c , t , π    (\pi-w_{c,t})x_{c,t,\pi}  (π−wc,t )xc,t,π ; summing is linear.
+	•	Constraint (1) is the outer probing constraint of Gupta–Nagarajan: at most one slice (price) is probed for each rider .
+	•	Constraint (2) ties the acceptance probability to the probe—exactly their relation x e  = p e    y e   x_e = p_e\,y_e  xe =pe ye in LP (4) of the paper .
+	•	Constraint (3) is the inner packing constraint (a standard matching / one-per-taxi matroid) .
+Because every term is linear, the whole model is a linear program of size
+O
+(
+∣
+C
+∣
+ 
+∣
+Π
+∣
+ 
+∣
+T
+∣
+)
+O(|C|\,|\Pi|\,|T|)
+O(∣C∣∣Π∣∣T∣).
+
+4. Why this LP matches the concave objective
+For a fixed rider
+c
+c
+c: choose variables
+y
+c
+,
+π
+=
+q
+,
+
+x
+c
+,
+t
+,
+π
+=
+p
+c
+(
+π
+)
+ 
+q
+⋅
+z
+t
+y_{c,\pi}=q,\qquad x_{c,t,\pi}=p_{c}(\pi)\,q\cdot z_{t}
+yc,π =q,xc,t,π =pc (π)q⋅zt
+with
+∑
+t
+z
+t
+=
+1
+\sum_t z_t=1
+∑t zt =1. The best choice of
+(
+q
+,
+π
+)
+(q,\pi)
+(q,π) is
+max
+⁡
+π
+∈
+Π
+c
+p
+c
+(
+π
+)
+ 
+π
+\max_{\pi\in\Pi_c} p_{c}(\pi)\,\pi
+maxπ∈Πc pc (π)π, i.e. the upper hull of the discrete revenue curve. Hence, when the grid is fine enough (or uses all support points of
+v
+c
+v_c
+vc ) the LP’s value on rider
+c
+c
+c equals
+max
+⁡
+π
+p
+c
+(
+π
+)
+ 
+π
+=
+R
+c
+(
+p
+c
+)
+\max_{\pi} p_{c}(\pi)\,\pi = R_c(p_c)
+maxπ pc (π)π=Rc (pc ), giving an exact linearisation of the original concave term. Gupta & Nagarajan prove that their LP dominates even the optimal Bayesian mechanism’s revenue, showing no loss in replacing the convex program by this LP .
+
+5. Solving and rounding
+	•	The LP can be solved with any off-the-shelf solver (the matrices are totally unimodular under pure matching, or admit polynomial separation oracles when additional matroid/knapsack constraints are present).
+	•	Gupta & Nagarajan supply a generic rounding based on contention-resolution schemes that turns the fractional solution into a sequential posted-price+matching policy whose expected profit is a constant-factor approximation of the LP (and hence of the true optimum) .
+
+Practical tips
+	1	Choosing Π c   \Pi_c  Πc . Quantile-based grids (e.g. 1 % steps of F c   F_c  Fc ) keep the LP small yet give ε-accurate revenue.
+	2	Warm-start. Initialise y c , π    y_{c,\pi}  yc,π at the monopoly price; solvers converge faster.
+	3	Post-processing. After obtaining integral y c , π    y_{c,\pi}  yc,π , compute a maximum-weight matching on the accepted riders to respect taxi capacities exactly.
+With this LP you sidestep the nonlinearities completely while staying within the rigorous framework analysed by Gupta & Nagarajan.
+Sources
+
+You said:
+Great now implement this program in python pulp, ensure correctness and 1:1 with theory model
+
+ChatGPT said:
+
+Thought for 11 seconds
+
+Thought for 30 seconds
+Below is a drop-in, one-for-one implementation of the Gupta – Nagarajan linear program for ride-hailing, written with PuLP. Every symbol in the code corresponds exactly to the notation used in the LP you asked for:
+theory
+code variable
+comment
+y
+c
+,
+π
+y_{c,\pi}
+yc,π
+y[(c, pi)]
+probability we offer price
+π
+\pi
+π to rider
+c
+c
+c
+x
+c
+,
+t
+,
+π
+x_{c,t,\pi}
+xc,t,π
+x[(c, t, pi)]
+prob. rider
+c
+c
+c accepts
+π
+\pi
+π and is matched to taxi
+t
+t
+t
+acceptance prob.
+p
+c
+(
+π
+)
+p_c(\pi)
+pc (π)
+acceptance_prob[(c, pi)]
+multiplies
+y
+y
+y in constraint (2)
+cost
+w
+c
+,
+t
+w_{c,t}
+wc,t
+cost[(c, t)]
+appears in the objective
+price grid
+Π
+c
+\Pi_c
+Πc
+price_grid[c]
+discrete menu of posted prices
+
+# gp_ride_hailing_lp.py  —  Gupta & Nagarajan LP in PuLP
+import pulp as pl
+
+def build_ride_hailing_lp(clients,
+                          taxis,
+                          edges,
+                          price_grid,
+                          acceptance_prob,
+                          cost,
+                          solver=None):
+    """
+    Build the Gupta–Nagarajan LP for ride-hailing revenue maximisation.
+
+    Parameters
+    ----------
+    clients : iterable
+        Rider IDs.
+    taxis   : iterable
+        Taxi IDs.
+    edges   : set[(c, t)]
+        Feasible rider-taxi pairs (the bipartite graph E).
+    price_grid : dict {c: iterable of prices}
+        Discrete set Π_c of candidate prices for each rider.
+    acceptance_prob : dict {(c, π): float}
+        Acceptance probability p_c(π).
+    cost : dict {(c, t): float}
+        Driving cost w_{c,t}.
+    solver : optional PuLP solver instance.
+
+    Returns
+    -------
+    prob : pulp.LpProblem            – the model (unsolved)
+    x    : dict[(c, t, π)] -> Var    – allocation variables
+    y    : dict[(c, π)]       -> Var – probing variables
+    """
+
+    # -------------  model  --------------------------------------------------
+    prob = pl.LpProblem("RideHailing_GN_LP", pl.LpMaximize)
+
+    # -------------  variables  ----------------------------------------------
+    y = { (c, pi): pl.LpVariable(f"y_{c}_{pi}", lowBound=0, upBound=1)
+          for c in clients
+          for pi in price_grid[c] }
+
+    x = { (c, t, pi): pl.LpVariable(f"x_{c}_{t}_{pi}", lowBound=0, upBound=1)
+          for (c, t) in edges
+          for pi in price_grid[c] }
+
+    # -------------  objective  ----------------------------------------------
+    prob += pl.lpSum(
+        (pi - cost[(c, t)]) * x[(c, t, pi)]
+        for (c, t) in edges
+        for pi      in price_grid[c]
+    ), "Total_expected_profit"
+
+    # -------------  constraints  --------------------------------------------
+    # (1)  probe at most one price per rider
+    for c in clients:
+        prob += (
+            pl.lpSum(y[(c, pi)] for pi in price_grid[c]) <= 1,
+            f"Offer_once_{c}"
+        )
+
+    # (2)  matching only after acceptance
+    for (c, t) in edges:
+        for pi in price_grid[c]:
+            prob += (
+                x[(c, t, pi)] <= acceptance_prob[(c, pi)] * y[(c, pi)],
+                f"Link_{c}_{t}_{pi}"
+            )
+
+    # (3)  taxi capacity: one rider per taxi
+    for t in taxis:
+        prob += (
+            pl.lpSum(
+                x[(c, t, pi)]
+                for c in clients if (c, t) in edges
+                for pi in price_grid[c]
+            ) <= 1,
+            f"Taxi_cap_{t}"
+        )
+
+    # optional custom solver
+    if solver is not None:
+        prob.solver = solver
+
+    return prob, x, y
+
+How to use
+
+import pulp as pl
+from gp_ride_hailing_lp import build_ride_hailing_lp
+
+# ------- toy data ----------------------------------------------------------
+clients = ["c1", "c2"]
+taxis   = ["t1", "t2"]
+edges   = {(c, t) for c in clients for t in taxis}
+
+price_grid = {c: [10, 15] for c in clients}
+
+acceptance_prob = {("c1", 10): 0.9,
+                   ("c1", 15): 0.5,
+                   ("c2", 10): 0.8,
+                   ("c2", 15): 0.4}
+
+cost = {("c1", "t1"): 5, ("c1", "t2"): 6,
+        ("c2", "t1"): 4, ("c2", "t2"): 5}
+
+# ------- build & solve ------------------------------------------------------
+prob, x, y = build_ride_hailing_lp(
+    clients, taxis, edges,
+    price_grid, acceptance_prob, cost
+)
+
+prob.solve(pl.PULP_CBC_CMD(msg=False))   # CBC is PuLP's default MILP solver
+
+print("Optimal expected profit:", pl.value(prob.objective))
+for (c, pi), var in y.items():
+    if var.varValue > 1e-6:
+        print(f"  offer {pi} zł to {c}  with prob {var.varValue:.3f}")
+for (c, t, pi), var in x.items():
+    if var.varValue > 1e-6:
+        print(f"  match {c}->{t} at {pi} zł  with prob {var.varValue:.3f}")
+Installation
+
+pip install pulp
+CBC ships automatically with the PyPI build of PuLP; no extra solver setup is required.
+
+Correctness w.r.t. the theory model
+	•	Objective  (pi - cost) * x reproduces ( π − w c , t   ) x c , t , π    (\pi-w_{c,t})x_{c,t,\pi}  (π−wc,t )xc,t,π .
+	•	Probe constraint ∑_π y ≤ 1 matches LP (1) in Gupta & Nagarajan.
+	•	Linking constraint x ≤ p · y is LP (2).
+	•	Capacity constraint each taxi is a unit-capacity resource, giving LP (3).
+Hence the PuLP model is a verbatim linearisation of the concave Myerson program via the Gupta & Nagarajan reduction. Just plug in real data (any number of riders, taxis, price points, and edges) and solve.
+
+ChatGPT said:
+
+Thought for 4 seconds
+
+\chapter{Redukcja wypukłego programu Myersona do liniowego programu Gupta--Nagarajan}
+\label{chap:GN}
+
+W poprzednich rozdziałach pokazaliśmy, że optymalny mechanizm w sensie
+Bayesowskim (w duchu pracy Myersona) daje się opisać wypukłym programem
+(\textsc{Myerson-CP}), w~którym głównym źródłem nieliniowości są
+wklęsłe funkcje przychodu
+\(R_{c}(p)\;=\;F_{c}^{-1}(1-p)\,p\).
+Choć ten program jest wypukły i można go rozwiązywać metodami
+wewnętrzno-punktowymi, w praktyce implementacja bywa uciążliwa:
+wymaga biblioteki do SOCP/CGP, dokładnego
+żelazkowania nieregularnych rozkładów oraz ręcznej
+post-eliminacji zmiennych dualnych.
+Poniżej opisujemy, jak dzięki pomysłowi
+Gupty i Nagarajana~\cite{GuptaNagarajan2013} przechodzimy do zupełnie
+liniowego modelu (\textsc{GN-LP}),
+zachowując tę samą granicę górną na przychód.\footnote{%
+Autorzy \emph{zasłużyli} na szczególne uznanie,
+ponieważ ich redukcja nie tylko linearyzuje funkcję celu,
+ale równocześnie zachowuje \emph{całą} strukturę ograniczeń pakujących
+(matroidy, plecaki, wielodostępy) i prowadzi do algorytmów
+o stałej aproksymacji przez
+schematy \emph{contention resolution}.}
+
+%-------------------------------------------------------------
+\section{Od krzywej przychodu do menu cen}
+\label{sec:GN_menu}
+
+Niech \(\Pi_{c}\subseteq [0,\pi^{\max}_{c}]\) będzie
+skończoną siatką cen dla klienta~\(c\).
+Dla każdej ceny \(\pi\in\Pi_{c}\) oznaczmy
+\(p_{c}(\pi)=\Pr[v_{c}\ge \pi]\).
+\emph{Kluczowy obserwacja} Gupty \& Nagarajana polega na zastąpieniu
+wklęsłej części
+\(R_{c}(p)\) przez wypukły \emph{górny obwiednia} zbudowany na
+punktach \(\{\,(\,p_{c}(\pi),\,p_{c}(\pi)\,\pi\,)\}_{\pi\in\Pi_{c}}\).
+W~rezultacie każdy potencjalny punkt pracy odpowiada dokładnie
+\emph{jednej cenie} z~menu i
+staje się \emph{liniowym} wycinkiem funkcji celu.
+
+%-------------------------------------------------------------
+\section{Zmienne i intuicja probabilistyczna}
+
+Dla przejrzystości zachowujemy notację
+sekcji~\ref{sec:Algorytm}:
+
+\begin{center}
+\begin{tabular}{lcl}
+\(y_{c,\pi}\) &--& prawdopodobieństwo, że klientowi \(c\) zaoferujemy cenę~\(\pi\);\\
+\(x_{c,t,\pi}\)&--& prawdopodobieństwo, że \(c\)
+\emph{zaakceptuje} \(\pi\) \emph{i} zostanie skojarzony z~taksówką~\(t\).
+\end{tabular}
+\end{center}
+
+Zmienna \(y_{c,\pi}\) opisuje \emph{etap próbkowania} (probe),
+natomiast \(x_{c,t,\pi}\) – \emph{etap realizacji}.  
+Związek
+\(
+x_{c,t,\pi}\;\le\;p_{c}(\pi)\,y_{c,\pi}
+\)
+po prostu mówi, że aby obsłużyć
+\((c,t)\) przy cenie \(\pi\) klient
+musi \underline{najpierw} otrzymać ofertę i \underline{następnie}
+przyjąć ją z~prawdopodobieństwem \(p_{c}(\pi)\).
+
+%-------------------------------------------------------------
+\section{Liniowy program Gupta--Nagarajan}
+\label{sec:GN_LP}
+
+\begin{align}
+\textsc{GN--LP:}\quad\max 
+  &\;\; \sum_{c\in C}\sum_{\pi\in\Pi_{c}}\sum_{t\in\delta(c)}
+        (\pi-w_{c,t})\,x_{c,t,\pi}
+    \label{eq:GN_obj}\\[2pt]
+\text{s.t.}\quad
+  &\sum_{\pi\in\Pi_{c}} y_{c,\pi}\;\le\;1
+         &&\forall c\in C
+         &&\text{(każdemu klientowi proponujemy najwyżej jedną cenę)}
+         \label{eq:GN_probe}\\
+  &x_{c,t,\pi}\;\le\;p_{c}(\pi)\,y_{c,\pi}
+         &&\forall(c,t)\in E,\ \forall\pi\in\Pi_{c}
+         &&\text{(akceptacja możliwa tylko po ofercie)}
+         \label{eq:GN_link}\\
+  &\sum_{c\in C}\sum_{\pi\in\Pi_{c}}
+         x_{c,t,\pi}\;\le\;1
+         &&\forall t\in T
+         &&\text{(każda taksówka obsługuje co najwyżej jednego klienta)}
+         \label{eq:GN_cap}\\
+  &y_{c,\pi},\,x_{c,t,\pi}\;\ge\;0.
+\end{align}
+
+\smallskip
+\paragraph{Interpretacja~(\ref{eq:GN_obj})–(\ref{eq:GN_cap}).}
+Ograniczenie~(\ref{eq:GN_probe}) to dokładnie macierz
+\emph{próbkowania} (outer matroid) Gupty–Nagarajana,
+zaś~(\ref{eq:GN_cap})~– wewnętrzny problem pakowania w
+\emph{grafie skojarzeń}.  
+Łańcuch nierówności~(\ref{eq:GN_link})
+realizuje koncepcję
+\emph{stochastycznego sondowania krawędzi} (edge-probing LP),
+centralną w~\cite{GuptaNagarajan2013}.  
+Warto zauważyć, że
+każdy blok cen dla danego klienta tworzy
+osobny „pęczek” zmiennych \((y,x)\),
+dlatego po rozwiązaniu LP
+łatwo odtworzyć politykę sekwencyjnych cen
+dokładnie w sensie Algorytmu~\ref{alg:algos}.
+
+%-------------------------------------------------------------
+\section{Własności i uzasadnienie}
+
+\begin{itemize}
+\item[(i)]  \textbf{Dominacja:}\
+  Dla dowolnego rozkładu wartości
+  istnieje wektor \(\{y_{c,\pi}\}\)
+  taki, że wartość~\eqref{eq:GN_obj}
+  pokrywa \(R_{c}(p_{c})\), a~zatem
+  \(\textsc{GN--LP}\) jest \emph{górnym ograniczeniem}
+  zarówno wypukłego programu Myersona,
+  jak i (oraz o tym milczą)
+  dowolnego mechanizmu Bayesowskiego.
+\item[(ii)] \textbf{Rozwiązywalność:}\
+  Program jest liniowy; dla grafu skojarzeń
+  macierz ograniczeń jest \emph{całkowicie unimodularna},
+  co oznacza, że rozwiązanie ciągłe jest zarazem całkowite.
+\item[(iii)] \textbf{Rounding \(\alpha\)-aproksymacyjny:}\
+  Gupta~\&~Nagarajan pokazują
+  konstrukcję \(\alpha\!\approx\!0{,}5\)
+  poprzez \emph{random-order contention resolution scheme}.
+  W naszym przypadku przekłada się to na
+  dwukrotną aproksymację względem optimum Myersona,
+  zgodną z Twierdzeniem~\ref{thm:Algorytm--oblicza-2apro}.
+\end{itemize}
+
+%-------------------------------------------------------------
+\section{Implementacja w \texttt{PuLP}}
+\label{sec:GN_impl}
+
+Na potrzeby eksperymentów
+zaimplementowaliśmy~(\ref{eq:GN_obj})–(\ref{eq:GN_cap})
+w języku \texttt{Python},
+korzystając z biblioteki \texttt{PuLP}.
+Fragment listing~\ref{lst:pulp} (w~załączeniu repozytorium) pokazuje
+funkcję \texttt{build\_ride\_hailing\_lp},
+która \emph{punkt-w-punkt} odwzorowuje powyższy LP
+na obiekty \texttt{LpVariable}, \texttt{LpConstraint} oraz
+\texttt{LpProblem}.
+Wszystkie zmienne \(x,y\) mają domyślnie
+granice \([0,1]\), dzięki czemu
+automatycznie uzyskujemy interpretację probabilistyczną.
+
+\bigskip
+\noindent
+Podsumowując, redukcja Gupty i Nagarajana
+pozwala nam przejść od konceptualnie eleganckiego, lecz
+obliczeniowo „ciężkiego” programu wypukłego,
+do \emph{zupełnie liniowego} modelu z~identycznym
+górnym ograniczeniem na przychód.
+Co więcej, konstrukcja ta
+otwiera drogę do szybkich heurystyk on-line
+(\emph{greedy-CR}, \(\psi\)-ranking),
+które badamy w~Rozdziale~\ref{chap:Experiments}.
+
+
+
+
+
+
+└── Rideshare_experiment
+    └── bin
+        ├── data_download.py
+        ├── experiment_PL.py
+        └── experiment_Sigmoid.py
+
+
+/Rideshare_experiment/bin/data_download.py:
+--------------------------------------------------------------------------------
+ 1 | import requests
+ 2 | 
+ 3 | url='https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_2019-10.parquet'
+ 4 | filename='../data/green_tripdata_2019-10.parquet'
+ 5 | urlData = requests.get(url).content
+ 6 | with open(filename ,mode='wb') as f:
+ 7 |     f.write(urlData)
+ 8 | 
+ 9 | url='https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2019-10.parquet'
+10 | filename='../data/yellow_tripdata_2019-10.parquet'
+11 | urlData = requests.get(url).content
+12 | with open(filename ,mode='wb') as f:
+13 |     f.write(urlData)
+14 | 
+15 | import sys
+16 | import pandas
+17 | df = pandas.read_parquet('../data/green_tripdata_2019-10.parquet')
+18 | df.to_csv('../data/green_tripdata_2019-10.csv',index=True)
+19 | 
+20 | import sys
+21 | import pandas
+22 | df = pandas.read_parquet('../data/yellow_tripdata_2019-10.parquet')
+23 | df.to_csv('../data/yellow_tripdata_2019-10.csv',index=True)
+24 | 
+
+
+--------------------------------------------------------------------------------
+/Rideshare_experiment/bin/experiment_PL.py:
+--------------------------------------------------------------------------------
+  1 | import pandas as pd
+  2 | import numpy as np
+  3 | import urllib.request
+  4 | import zipfile
+  5 | import random
+  6 | import itertools
+  7 | import math
+  8 | import scipy.special as spys
+  9 | import networkx as nx
+ 10 | from networkx.algorithms import bipartite
+ 11 | import itertools
+ 12 | import time
+ 13 | import pyproj
+ 14 | grs80 = pyproj.Geod(ellps='GRS80')
+ 15 | import shapefile
+ 16 | import shapely
+ 17 | from descartes.patch import PolygonPatch
+ 18 | import matplotlib as mpl
+ 19 | import matplotlib.pyplot as plt
+ 20 | from scipy.spatial import distance_matrix
+ 21 | import datetime
+ 22 | import collections
+ 23 | import csv
+ 24 | import pickle
+ 25 | import os
+ 26 | import sys
+ 27 | 
+ 28 | #Setting
+ 29 | #input parameters
+ 30 | args=sys.argv
+ 31 | place=args[1]
+ 32 | day=int(args[2])
+ 33 | time_interval=int(args[3])
+ 34 | time_unit=args[4]
+ 35 | simulataion_range=int(args[5])
+ 36 | 
+ 37 | #given constant parameters
+ 38 | year=2019
+ 39 | month=10
+ 40 | #allowable error
+ 41 | epsilon=10**-10
+ 42 | #number of simulations to calculate an approximated objective value
+ 43 | num_eval=100
+ 44 | #parameters to set w_ij
+ 45 | alpha=18
+ 46 | s_taxi=25
+ 47 | #parameters for the existing method, LinUCB
+ 48 | UCB_alpha=0.5
+ 49 | base_price=5.875
+ 50 | a=np.array([0.6,0.8,1,1.2,1.4])
+ 51 | arm_price=base_price*a
+ 52 | 
+ 53 | #make dist_matrix, which includes the distance between each area
+ 54 | df_loc=pd.read_csv("../data/area_information.csv")
+ 55 | tu_data=df_loc.values[:,6:8]
+ 56 | dist_matrix = np.zeros([df_loc.values[:,6:8].shape[0],df_loc.values[:,6:8].shape[0]])
+ 57 | for i in range(df_loc.values[:,6:8].shape[0]):
+ 58 |     for j in range(df_loc.values[:,6:8].shape[0]):
+ 59 |         azimuth, bkw_azimuth, distance = grs80.inv(tu_data[i,0], tu_data[i,1], tu_data[j,0], tu_data[j,1])
+ 60 |         dist_matrix[i,j]=distance
+ 61 | dist_matrix=dist_matrix*0.001
+ 62 | 
+ 63 | df_ID=df_loc[df_loc["borough"] == place]
+ 64 | PUID_set=list(set(df_ID.values[:,4]))
+ 65 | DOID_set =list(set(df_ID.values[:,4]))
+ 66 | 
+ 67 | #download trained matrices and vectors for the existing method, LinUCB
+ 68 | with open('../work/learned_matrix_PL/201908_%s/A_0_08' % place, 'rb') as web:
+ 69 |     A_0 = pickle.load(web)
+ 70 | with open('../work/learned_matrix_PL/201909_%s/A_0_09' % place, 'rb') as web:
+ 71 |     A_0 += pickle.load(web)
+ 72 | with open('../work/learned_matrix_PL/201907_%s/A_0_07' % place, 'rb') as web:
+ 73 |     A_0 += pickle.load(web)
+ 74 | A_0+=np.eye(A_0.shape[0])
+ 75 | with open('../work/learned_matrix_PL/201908_%s/A_1_08' % place, 'rb') as web:
+ 76 |     A_1 = pickle.load(web)
+ 77 | with open('../work/learned_matrix_PL/201909_%s/A_1_09' % place, 'rb') as web:
+ 78 |     A_1 += pickle.load(web)
+ 79 | with open('../work/learned_matrix_PL/201907_%s/A_1_07' % place, 'rb') as web:
+ 80 |     A_1 += pickle.load(web)
+ 81 | A_1+=np.eye(A_0.shape[0])
+ 82 | with open('../work/learned_matrix_PL/201908_%s/A_2_08' % place, 'rb') as web:
+ 83 |     A_2 = pickle.load(web)
+ 84 | with open('../work/learned_matrix_PL/201909_%s/A_2_09' % place, 'rb') as web:
+ 85 |     A_2 += pickle.load(web)
+ 86 | with open('../work/learned_matrix_PL/201907_%s/A_2_07' % place, 'rb') as web:
+ 87 |     A_2 += pickle.load(web)
+ 88 | A_2+=np.eye(A_0.shape[0])
+ 89 | with open('../work/learned_matrix_PL/201908_%s/A_3_08' % place, 'rb') as web:
+ 90 |     A_3 = pickle.load(web)
+ 91 | with open('../work/learned_matrix_PL/201909_%s/A_3_09' % place, 'rb') as web:
+ 92 |     A_3 += pickle.load(web)
+ 93 | with open('../work/learned_matrix_PL/201907_%s/A_3_07' % place, 'rb') as web:
+ 94 |     A_3 += pickle.load(web)
+ 95 | A_3+=np.eye(A_0.shape[0])
+ 96 | with open('../work/learned_matrix_PL/201908_%s/A_4_08' % place, 'rb') as web:
+ 97 |     A_4 = pickle.load(web)
+ 98 | with open('../work/learned_matrix_PL/201909_%s/A_4_09' % place, 'rb') as web:
+ 99 |     A_4 += pickle.load(web)
+100 | with open('../work/learned_matrix_PL/201907_%s/A_4_07' % place, 'rb') as web:
+101 |     A_4 += pickle.load(web)
+102 | A_4+=np.eye(A_0.shape[0])
+103 | with open('../work/learned_matrix_PL/201908_%s/b_0_08' % place, 'rb') as web:
+104 |     b_0 = pickle.load(web)
+105 | with open('../work/learned_matrix_PL/201909_%s/b_0_09' % place, 'rb') as web:
+106 |     b_0 += pickle.load(web)
+107 | with open('../work/learned_matrix_PL/201907_%s/b_0_07' % place, 'rb') as web:
+108 |     b_0 += pickle.load(web)
+109 | with open('../work/learned_matrix_PL/201908_%s/b_1_08' % place, 'rb') as web:
+110 |     b_1 = pickle.load(web)
+111 | with open('../work/learned_matrix_PL/201909_%s/b_1_09' % place, 'rb') as web:
+112 |     b_1 += pickle.load(web)
+113 | with open('../work/learned_matrix_PL/201907_%s/b_1_07' % place, 'rb') as web:
+114 |     b_1 += pickle.load(web)
+115 | with open('../work/learned_matrix_PL/201908_%s/b_2_08' % place, 'rb') as web:
+116 |     b_2 = pickle.load(web)
+117 | with open('../work/learned_matrix_PL/201909_%s/b_2_09' % place, 'rb') as web:
+118 |     b_2 += pickle.load(web)
+119 | with open('../work/learned_matrix_PL/201907_%s/b_2_07' % place, 'rb') as web:
+120 |     b_2 += pickle.load(web)
+121 | with open('../work/learned_matrix_PL/201908_%s/b_3_08' % place, 'rb') as web:
+122 |     b_3 = pickle.load(web)
+123 | with open('../work/learned_matrix_PL/201909_%s/b_3_09' % place, 'rb') as web:
+124 |     b_3 += pickle.load(web)
+125 | with open('../work/learned_matrix_PL/201907_%s/b_3_07' % place, 'rb') as web:
+126 |     b_3 += pickle.load(web)
+127 | with open('../work/learned_matrix_PL/201908_%s/b_4_08' % place, 'rb') as web:
+128 |     b_4 = pickle.load(web)
+129 | with open('../work/learned_matrix_PL/201909_%s/b_4_09' % place, 'rb') as web:
+130 |     b_4 += pickle.load(web)
+131 | with open('../work/learned_matrix_PL/201907_%s/b_4_07' % place, 'rb') as web:
+132 |     b_4 += pickle.load(web)
+133 | 
+134 | #Preprocessing of the data
+135 | hour_start=10
+136 | hour_end=20
+137 | minute_0=0
+138 | second_0=0
+139 | day_start_time=datetime.datetime(year,month,day,hour_start-1,minute_0+55,second_0)
+140 | day_end_time=datetime.datetime(year,month,day,hour_end,minute_0+5,second_0)
+141 | df = pd.read_csv("../data/green_tripdata_2019-10.csv",parse_dates=['lpep_pickup_datetime','lpep_dropoff_datetime'])
+142 | df=df[['lpep_pickup_datetime','lpep_dropoff_datetime','PULocationID', 'DOLocationID','trip_distance','total_amount']]
+143 | df=pd.merge(df, df_loc, how="inner" ,left_on="PULocationID",right_on="LocationID")
+144 | df=df[(df["trip_distance"] >10**(-3))&(df["total_amount"] >10**(-3))&(df["borough"] == place)&(df["PULocationID"] < 264)&(df["DOLocationID"] < 264)&(df["lpep_pickup_datetime"] > day_start_time)& (df["lpep_pickup_datetime"] < day_end_time)]
+145 | green_tripdata=df[['borough','PULocationID', 'DOLocationID','trip_distance','total_amount','lpep_pickup_datetime','lpep_dropoff_datetime']]
+146 | df = pd.read_csv("../data/yellow_tripdata_2019-10.csv",parse_dates=['tpep_pickup_datetime','tpep_dropoff_datetime'])
+147 | df=pd.merge(df, df_loc, how="inner" ,left_on="PULocationID",right_on="LocationID")
+148 | df=df[(df["trip_distance"] >10**(-3))&(df["total_amount"] >10**(-3))&(df["borough"] == place)&(df["PULocationID"] < 264)&(df["DOLocationID"] < 264)&(df["tpep_pickup_datetime"] > day_start_time)& (df["tpep_pickup_datetime"] < day_end_time)]
+149 | yellow_tripdata=df[['borough','PULocationID', 'DOLocationID','trip_distance','total_amount','tpep_pickup_datetime','tpep_dropoff_datetime']]
+150 | 
+151 | #define functions used in the proposed method
+152 | def get_target_min_index(min_index, distance, unsearched_nodes):
+153 |     start = 0
+154 |     while True:
+155 |         index = distance.index(min_index, start)
+156 |         found = index in unsearched_nodes
+157 |         if found:
+158 |             return index
+159 |         else:
+160 |             start = index + 1
+161 | def dfs(v, visited):
+162 |     for u in edges[v]:
+163 |         if u in visited:
+164 |             continue
+165 |         visited.add(u)
+166 |         if matched[u] == -1 or dfs(matched[u], visited):
+167 |             matched[u] = v
+168 |             return True
+169 |     return False
+170 | 
+171 | #the function calculateing the objectives value for a given price and acceptance results
+172 | def value_eval(P, accept_results):
+173 |     group1 = range(n)
+174 |     group2 = range(n,n+m)
+175 |     g_post = nx.Graph()
+176 |     g_post.add_nodes_from(group1, bipartite=1)
+177 |     g_post.add_nodes_from(group2, bipartite=0)
+178 |     for i in range(n):
+179 |         if  accept_results[i]==1:
+180 |             for j in range(m):
+181 |                 val = P[i]+W[i,j]
+182 |                 g_post.add_edge(i, j+n, weight=val)
+183 |     matched_edges = nx.max_weight_matching(g_post)
+184 |     opt_value=0.0
+185 |     reward=np.zeros(n)
+186 |     for (i, j) in matched_edges:
+187 |         if i>j:
+188 |             jtmp=j
+189 |             j=i-n
+190 |             i=jtmp
+191 |         else:
+192 |             j=j-n
+193 |         opt_value+=P[i]+W[i,j];
+194 |         reward[i]=P[i]+W[i,j]
+195 |     return [opt_value,matched_edges,reward]
+196 | 
+197 | # Lists to store results
+198 | objective_value_proposed_list=[]
+199 | objective_value_MAPS_list=[]
+200 | objective_value_LinUCB_list=[]
+201 | 
+202 | time_proposed_list=[]
+203 | time_MAPS_list=[]
+204 | time_LinUCB_list=[]
+205 | 
+206 | for tt_tmp in range(simulataion_range):
+207 |     #make simulation data
+208 |     tt=tt_tmp*5
+209 |     h,m=divmod(tt,60)
+210 |     hour=10+h
+211 |     minute=m
+212 |     second=0
+213 |     set_time=datetime.datetime(year,month,day,hour,minute,second)
+214 |     if time_unit=='m':
+215 |         if minute+time_interval<60:
+216 |             after_time=datetime.datetime(year,month,day,hour,minute+time_interval,second)
+217 |         else:
+218 |             after_time=datetime.datetime(year,month,day,hour+1,minute+time_interval-60,second)
+219 |     if time_unit=='s':
+220 |         after_time=datetime.datetime(year,month,day,hour,minute,second+time_interval)
+221 |     after_time=datetime.datetime(year,month,day,hour,minute,second+30)
+222 |     green_tripdata_target_requesters=green_tripdata[(green_tripdata["lpep_pickup_datetime"] > set_time)& (green_tripdata["lpep_pickup_datetime"] < after_time)]
+223 |     yellow_tripdata_target_requesters=yellow_tripdata[(yellow_tripdata["tpep_pickup_datetime"] > set_time)& (yellow_tripdata["tpep_pickup_datetime"] < after_time)]
+224 |     green_tripdata_target_taxis=green_tripdata[(green_tripdata["lpep_dropoff_datetime"] > set_time)& (green_tripdata["lpep_dropoff_datetime"] < after_time)]
+225 |     yellow_tripdata_target_taxis=yellow_tripdata[(yellow_tripdata["tpep_dropoff_datetime"] > set_time)& (yellow_tripdata["tpep_dropoff_datetime"] < after_time)]
+226 |     df_requesters=np.concatenate([green_tripdata_target_requesters.values, yellow_tripdata_target_requesters.values])
+227 |     df_taxis=np.concatenate([green_tripdata_target_taxis.values, yellow_tripdata_target_taxis.values])[:,2]
+228 |     time_consume=np.zeros([df_requesters.shape[0],1])
+229 |     for i in range(df_requesters.shape[0]):
+230 |         time_consume[i]=(df_requesters[i,6]-df_requesters[i,5]).seconds
+231 |     df_requesters=np.hstack([df_requesters[:,0:5],time_consume])
+232 | 
+233 |     #delete data with too little distance traveled
+234 |     df_requesters=df_requesters[df_requesters[:,3]>10**-3]
+235 |     df_requesters=df_requesters[df_requesters[:,4]>10**-3]
+236 |     #Sort by distance in descending order, as required by the existing MAPS method
+237 |     df_requesters=df_requesters[np.argsort(df_requesters[:,3])]
+238 |     #Convert units of distance to km
+239 |     df_requesters[:,3]=df_requesters[:,3]*1.60934
+240 | 
+241 |     requester_pickup_location_x=tu_data[df_requesters[:,1].astype('int64')-1,0].reshape((df_requesters.shape[0],1))+np.random.normal(0, 0.00306, (df_requesters.shape[0], 1))
+242 |     requester_pickup_location_y=tu_data[df_requesters[:,1].astype('int64')-1,1].reshape((df_requesters.shape[0],1))+np.random.normal(0, 0.000896, (df_requesters.shape[0], 1))
+243 |     taxi_location_x=tu_data[df_taxis.astype('int64')-1,0].reshape((df_taxis.shape[0],1))+np.random.normal(0, 0.00306, (df_taxis.shape[0], 1))
+244 |     taxi_location_y=tu_data[df_taxis.astype('int64')-1,1].reshape((df_taxis.shape[0],1))+np.random.normal(0, 0.000896, (df_taxis.shape[0], 1))
+245 | 
+246 |     n=df_requesters.shape[0]
+247 |     m=df_taxis.size
+248 | 
+249 |     if n==0 or m==0:
+250 |         np.append(objective_value_proposed_list,0)
+251 |         np.append(objective_value_MAPS_list,0)
+252 |         np.append(objective_value_LinUCB_list,0)
+253 |         np.append(time_proposed_list,0)
+254 |         np.append(time_MAPS_list,0)
+255 |         np.append(time_LinUCB_list,0)
+256 |     else:
+257 |         c=2/df_requesters[:,4]
+258 |         d=3
+259 |         #calculate distances between requesters and taxis
+260 |         distance_ij=np.zeros((df_requesters.shape[0],df_taxis.size))
+261 |         for i in range(df_requesters.shape[0]):
+262 |             for j in range(df_taxis.size):
+263 |                 azimuth, bkw_azimuth, distance = grs80.inv(requester_pickup_location_x[i], requester_pickup_location_y[i], taxi_location_x[j],taxi_location_y[j])
+264 |                 distance_ij[i,j]=distance*0.001
+265 |         #calculate edge weights from distances between requesters and taxis
+266 |         W=np.zeros((df_requesters.shape[0],df_taxis.size))
+267 |         Cost_matrix=np.ones([n+m+2,n+m+2])*np.inf
+268 |         for i in range(df_requesters.shape[0]):
+269 |             for j in range(df_taxis.size):
+270 |                 W[i,j]=-(distance_ij[i,j]+df_requesters[i,3])/s_taxi*alpha
+271 |                 Cost_matrix[i,n+j]=-W[i,j]
+272 |                 Cost_matrix[n+j,i]=W[i,j]
+273 | 
+274 |         #start proposed method
+275 |         start_time=time.time()
+276 |         #generate the graph of min-cost flow problem
+277 |         G = nx.DiGraph()
+278 |         #add nodes
+279 |         #u
+280 |         G.add_nodes_from(range(n))
+281 |         #v
+282 |         G.add_nodes_from(range(n,n+m))
+283 |         #s
+284 |         G.add_node(n+m)
+285 |         #t
+286 |         G.add_node(n+m+1)
+287 | 
+288 |         #set the amount of delta (amount to adjust current flow)
+289 |         delta=n
+290 | 
+291 |         #Cap_matrix representing the remaining capacity of each edge
+292 |         Cap_matrix=np.zeros([n+m+2,n+m+2])
+293 |         for i in range(n):
+294 |             for j in range(m):
+295 |                 G.add_edge(i, n+j)
+296 |                 Cap_matrix[i, n+j]=np.inf
+297 |                 G.add_edge(n+j,i)
+298 | 
+299 |         for i in range(n):
+300 |             val = (1/c[i]*(delta**2)-(d/c[i])*delta-0)/delta
+301 |             G.add_edge(n+m,i)
+302 |             Cap_matrix[n+m,i]=1
+303 |             Cost_matrix[n+m,i]=val
+304 |             G.add_edge(i,n+m)
+305 | 
+306 |         for j in range(m):
+307 |             G.add_edge(n+j,n+m+1)
+308 |             Cap_matrix[n+j,n+m+1]=1
+309 |             Cost_matrix[n+j,n+m+1]=0
+310 |             G.add_edge(n+m+1,n+j)
+311 |             Cost_matrix[n+m+1,n+j]=0
+312 | 
+313 |         G.add_edge(n+m,n+m+1)
+314 |         Cap_matrix[n+m,n+m+1]=n
+315 |         Cost_matrix[n+m,n+m+1]=0
+316 |         G.add_edge(n+m+1,n+m)
+317 |         Cap_matrix[n+m+1,n+m]=0
+318 |         Cost_matrix[n+m+1,n+m]=0
+319 | 
+320 |         #Set quantities that do not match flow constraints (, that is, equations (3)--(5) in our paper)
+321 |         excess=np.zeros(n+m+2)
+322 |         excess[n+m]=n
+323 |         excess[n+m+1]=-n
+324 | 
+325 |         Flow=np.zeros([n+m+2,n+m+2])
+326 |         potential=np.zeros(n+m+2)
+327 | 
+328 |         #first iteration
+329 |         #delta-scaling phase
+330 |         for i in range(n):
+331 |             for j in range (m):
+332 |                 if Cost_matrix[i,n+j] <0:
+333 |                     Flow[i,n+j]+=delta
+334 |                     excess[i] -= delta
+335 |                     excess[n+j] += delta
+336 |                     Cap_matrix[i,n+j]-=delta
+337 |                     Cap_matrix[n+j,i]+=delta
+338 | 
+339 |         #shortest path phase
+340 |         while len(list(*np.where(excess >= delta)))>0 and len(list(*np.where(excess <= -delta)))>0:
+341 |             start_node=list(*np.where(excess >= delta))[0]
+342 |             node_num = n+m+2
+343 |             unsearched_nodes = list(range(node_num))
+344 |             distance = [math.inf] * node_num
+345 |             previous_nodes = [-1] * node_num
+346 |             distance[start_node] = 0
+347 |             searched_nodes=[]
+348 |             while(len(unsearched_nodes) != 0): #Repeat until there are no more unsearched nodes
+349 |                 posible_min_distance = math.inf  #dummy number
+350 |                 for node_index in unsearched_nodes:
+351 |                     if posible_min_distance > distance[node_index]:
+352 |                         posible_min_distance = distance[node_index]
+353 |                 target_min_index = get_target_min_index(posible_min_distance, distance, unsearched_nodes)
+354 |                 unsearched_nodes.remove(target_min_index)
+355 |                 searched_nodes.append(target_min_index)
+356 |                 if excess[target_min_index] <= -delta:
+357 |                     end_node=target_min_index
+358 |                     break
+359 |                 neighbor_node_list = list(G.succ[target_min_index])
+360 |                 for neighbor_node in neighbor_node_list:
+361 |                     if distance[neighbor_node] > distance[target_min_index] + Cost_matrix[target_min_index,neighbor_node] -potential[target_min_index]+potential[neighbor_node] and Cap_matrix[target_min_index,neighbor_node] >= delta:
+362 |                         distance[neighbor_node] = distance[target_min_index] + Cost_matrix[target_min_index,neighbor_node]-potential[target_min_index]+potential[neighbor_node] # 過去に設定されたdistanceよりも小さい場合はdistanceを更新
+363 |                         previous_nodes[neighbor_node] =  target_min_index
+364 | 
+365 |             #Update potential
+366 |             for i in range(n+m+2):
+367 |                 if i in searched_nodes:
+368 |                     potential[i] -= distance[i]
+369 |                 else:
+370 |                     potential[i] -= distance[end_node]
+371 | 
+372 |             #Update Flow
+373 |             tmp_node=end_node
+374 |             x=0
+375 |             while tmp_node!=start_node:
+376 |                 Flow[previous_nodes[tmp_node],tmp_node]+=delta
+377 |                 Cap_matrix[previous_nodes[tmp_node],tmp_node] -= delta
+378 |                 Cap_matrix[tmp_node,previous_nodes[tmp_node]] += delta
+379 |                 tmp_node=previous_nodes[tmp_node]
+380 | 
+381 |             #Update Cost_matrix
+382 |             for i in range(n):
+383 |                 val = (1/c[i]*((Flow[n+m,i]+delta)**2)-(d/c[i])*(Flow[n+m,i]+delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+384 |                 Cost_matrix[n+m,i]=val
+385 |                 val = (1/c[i]*((Flow[n+m,i]-delta)**2)-(d/c[i])*(Flow[n+m,i]-delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+386 |                 Cost_matrix[i,n+m]=val
+387 | 
+388 |             #Update excess
+389 |             excess[start_node]-=delta
+390 |             excess[end_node]+=delta
+391 | 
+392 |         #Update delta
+393 |         delta=0.5*delta
+394 |         #Update Cost_matrix
+395 |         for i in range(n):
+396 |             val = (1/c[i]*((Flow[n+m,i]+delta)**2)-(d/c[i])*(Flow[n+m,i]+delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+397 |             Cost_matrix[n+m,i]=val
+398 |             val = (1/c[i]*((Flow[n+m,i]-delta)**2)-(d/c[i])*(Flow[n+m,i]-delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+399 |             Cost_matrix[i,n+m]=val
+400 | 
+401 |         #2nd and subsequent iterations
+402 |         while delta>0.001:
+403 |             for i in range(n):
+404 |                 for j in range (m):
+405 |                     if Cost_matrix[i,n+j]-potential[i]+potential[n+j] < -epsilon and Cap_matrix[i,n+j]>=delta:
+406 |                         Flow[i,n+j]+=delta
+407 |                         excess[i] -= delta
+408 |                         excess[n+j] += delta
+409 |                         Cap_matrix[i,n+j]-=delta
+410 |                         Cap_matrix[n+j,i]+=delta
+411 | 
+412 |                     if Cost_matrix[n+j,i]-potential[n+j]+potential[i] < -epsilon and Cap_matrix[n+j,i]>=delta:
+413 |                         Flow[i,n+j]-=delta
+414 |                         excess[i] += delta
+415 |                         excess[n+j] -= delta
+416 |                         Cap_matrix[i,n+j]+=delta
+417 |                         Cap_matrix[n+j,i]-=delta
+418 | 
+419 |             for i in range(n):
+420 |                 if Cost_matrix[n+m,i]-potential[n+m]+potential[i] < -epsilon and Cap_matrix[n+m,i]>=delta:
+421 |                     Flow[n+m,i]+=delta
+422 |                     excess[n+m] -= delta
+423 |                     excess[i] += delta
+424 |                     Cap_matrix[n+m,i]-=delta
+425 |                     Cap_matrix[i,n+m]+=delta
+426 |                     val = (1/c[i]*((Flow[n+m,i]+delta)**2)-(d/c[i])*(Flow[n+m,i]+delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta
+427 |                     Cost_matrix[n+m,i]=val
+428 |                     val = (1/c[i]*((Flow[n+m,i]-delta)**2)-(d/c[i])*(Flow[n+m,i]-delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+429 |                     Cost_matrix[i,n+m]=val
+430 | 
+431 |                 if Cost_matrix[i,n+m]-potential[i]+potential[n+m] < -epsilon and Cap_matrix[i,n+m]>=delta:
+432 |                     Flow[n+m,i]-=delta
+433 |                     excess[n+m] += delta
+434 |                     excess[i] -= delta
+435 |                     Cap_matrix[n+m,i]+=delta
+436 |                     Cap_matrix[i,n+m]-=delta
+437 |                     val = (1/c[i]*((Flow[n+m,i]+delta)**2)-(d/c[i])*(Flow[n+m,i]+delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta
+438 |                     Cost_matrix[n+m,i]=val
+439 |                     val = (1/c[i]*((Flow[n+m,i]-delta)**2)-(d/c[i])*(Flow[n+m,i]-delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+440 |                     Cost_matrix[i,n+m]=val
+441 | 
+442 |             # j-t
+443 |             for j in range (m):
+444 |                 if -potential[n+j]+potential[n+m+1] < -epsilon and Cap_matrix[n+j,n+m+1]>=delta:
+445 |                     Flow[n+j,n+m+1]+=delta
+446 |                     excess[n+j] -= delta
+447 |                     excess[n+m+1] += delta
+448 |                     Cap_matrix[n+j,n+m+1]-=delta
+449 |                     Cap_matrix[n+m+1,n+j]+=delta
+450 | 
+451 |                 if -potential[n+m+1]+potential[n+j] < -epsilon and Cap_matrix[n+m+1,n+j]>=delta:
+452 |                     Flow[n+j,n+m+1]-=delta
+453 |                     excess[n+m+1] -= delta
+454 |                     excess[n+j] += delta
+455 |                     Cap_matrix[n+j,n+m+1]+=delta
+456 |                     Cap_matrix[n+m+1,n+j]-=delta
+457 | 
+458 |             # s-t
+459 |             if -potential[n+m]+potential[n+m+1] < -epsilon and Cap_matrix[n+m,n+m+1]>=delta:
+460 |                 Flow[n+m,n+m+1]+=delta
+461 |                 excess[n+m] -= delta
+462 |                 excess[n+m+1] += delta
+463 |                 Cap_matrix[n+m,n+m+1]-=delta
+464 |                 Cap_matrix[n+m+1,n+m]+=delta
+465 | 
+466 |             if -potential[n+m+1]+potential[n+m] < -epsilon and Cap_matrix[n+m+1,n+m]>=delta:
+467 |                 Flow[n+m,n+m+1]-=delta
+468 |                 excess[n+m+1] -= delta
+469 |                 excess[n+m] += delta
+470 |                 Cap_matrix[n+m,n+m+1]+=delta
+471 |                 Cap_matrix[n+m+1,n+m]-=delta
+472 | 
+473 |             #shortest path phase
+474 |             while len(list(*np.where(excess >= delta)))>0 and len(list(*np.where(excess <= -delta)))>0:
+475 |                 start_node=list(*np.where(excess >= delta))[0]
+476 |                 node_num = n+m+2
+477 |                 unsearched_nodes = list(range(node_num))
+478 |                 distance = [math.inf] * node_num
+479 |                 previous_nodes = [-1] * node_num
+480 |                 distance[start_node] = 0
+481 |                 searched_nodes=[]
+482 |                 while(len(unsearched_nodes) != 0):
+483 |                     posible_min_distance = math.inf
+484 |                     for node_index in unsearched_nodes:
+485 |                         if posible_min_distance > distance[node_index]:
+486 |                             posible_min_distance = distance[node_index]
+487 |                     target_min_index = get_target_min_index(posible_min_distance, distance, unsearched_nodes)
+488 |                     unsearched_nodes.remove(target_min_index)
+489 |                     searched_nodes.append(target_min_index)
+490 |                     if excess[target_min_index] <= -delta:
+491 |                         end_node=target_min_index
+492 |                         break
+493 |                     neighbor_node_list = list(G.succ[target_min_index])
+494 |                     for neighbor_node in neighbor_node_list:
+495 |                         if distance[neighbor_node] - epsilon > distance[target_min_index] + Cost_matrix[target_min_index,neighbor_node] -potential[target_min_index]+potential[neighbor_node] and Cap_matrix[target_min_index,neighbor_node] >= delta:
+496 |                             distance[neighbor_node] = distance[target_min_index] + Cost_matrix[target_min_index,neighbor_node]-potential[target_min_index]+potential[neighbor_node]
+497 |                             previous_nodes[neighbor_node] =  target_min_index
+498 |                 for i in range(n+m+2):
+499 |                     if i in searched_nodes:
+500 |                         potential[i] -= distance[i]
+501 |                     else:
+502 |                         potential[i] -= distance[end_node]
+503 |                 tmp_node=end_node
+504 |                 x=0
+505 |                 while tmp_node!=start_node:
+506 |                     Flow[previous_nodes[tmp_node],tmp_node]+=delta
+507 |                     Cap_matrix[previous_nodes[tmp_node],tmp_node] -= delta
+508 |                     Cap_matrix[tmp_node,previous_nodes[tmp_node]] += delta
+509 |                     tmp_node=previous_nodes[tmp_node]
+510 |                 for i in range(n):
+511 |                     val = (1/c[i]*((Flow[n+m,i]+delta)**2)-(d/c[i])*(Flow[n+m,i]+delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+512 |                     Cost_matrix[n+m,i]=val
+513 |                     val = (1/c[i]*((Flow[n+m,i]-delta)**2)-(d/c[i])*(Flow[n+m,i]-delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+514 |                     Cost_matrix[i,n+m]=val
+515 |                 excess[start_node]-=delta
+516 |                 excess[end_node]+=delta
+517 |             delta=0.5*delta
+518 |             for i in range(n):
+519 |                 val = (1/c[i]*((Flow[n+m,i]+delta)**2)-(d/c[i])*(Flow[n+m,i]+delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+520 |                 Cost_matrix[n+m,i]=val
+521 |                 val = (1/c[i]*((Flow[n+m,i]-delta)**2)-(d/c[i])*(Flow[n+m,i]-delta)-(1/c[i]*(Flow[n+m,i]**2)-(d/c[i])*Flow[n+m,i]))/delta #delta流した時の1単位あたりのコスト
+522 |                 Cost_matrix[i,n+m]=val
+523 | 
+524 |         #Calculate the price corresponding to the flow
+525 |         price_proposed=np.zeros(n)
+526 |         for i in range(n):
+527 |             price_proposed[i]=-(1/c[i])*Flow[n+m,i]+d/c[i]
+528 |         computation_time_proposed=time.time()-start_time
+529 | 
+530 |         #start MAPS method
+531 |         #MAPS considers each area's requester to be the same.
+532 |         requester_pickup_location_x_2=tu_data[df_requesters[:,1].astype('int64')-1,0].reshape((df_requesters.shape[0],1))
+533 |         requester_pickup_location_y_2=tu_data[df_requesters[:,1].astype('int64')-1,1].reshape((df_requesters.shape[0],1))
+534 |         taxi_location_x_2=tu_data[df_taxis.astype('int64')-1,0].reshape((df_taxis.shape[0],1))
+535 |         taxi_location_y_2=tu_data[df_taxis.astype('int64')-1,1].reshape((df_taxis.shape[0],1))
+536 |         distance_ij_homogeneous=np.zeros((df_requesters.shape[0],df_taxis.size))
+537 |         for i in range(df_requesters.shape[0]):
+538 |             for j in range(df_taxis.size):
+539 |                 azimuth, bkw_azimuth, distance = grs80.inv(requester_pickup_location_x_2[i], requester_pickup_location_y_2[i], taxi_location_x_2[j],taxi_location_y_2[j])
+540 |                 distance_ij_homogeneous[i,j]=distance*0.001
+541 |         #set of area IDs where at least one requester exists
+542 |         ID_set=list(set(df_requesters[:,1]))
+543 |         #parameters to calculate the acceptance rate
+544 |         S_0_rate=1.5
+545 |         S_a=1/(S_0_rate-1)
+546 |         S_b=1+1/(S_0_rate-1)
+547 |         #the upperbound and lower bound of the price
+548 |         p_max=np.amax(df_requesters[:,4]/df_requesters[:,3])*S_0_rate
+549 |         p_min=np.amin(df_requesters[:,4]/df_requesters[:,3])
+550 |         #start MAPS algorithm
+551 |         start_time1=time.time()
+552 |         p_current=np.ones(len(ID_set))*p_max
+553 |         current_count=np.zeros(len(ID_set))
+554 |         Nr=np.zeros(len(ID_set))
+555 |         Nr_max=np.zeros(len(ID_set))
+556 |         for i in range(len(ID_set)):
+557 |             Nr_max[i]+=sum(df_requesters[:,1]==ID_set[i])
+558 |         dr_sum=np.zeros(len(ID_set))
+559 | 
+560 |         p_new=np.ones(len(ID_set))*p_max
+561 |         new_count=np.zeros(len(ID_set))
+562 |         delta_new=np.zeros(len(ID_set))
+563 | 
+564 |         num_requseters=len(df_requesters[:,0])
+565 |         num_taxis=len(df_taxis)
+566 |         edges = [set() for _ in range(num_requseters)]
+567 |         matched=[-1]*num_taxis
+568 |         matched_r=[-1]*num_requseters
+569 |         D_pre=np.zeros(len(ID_set))
+570 | 
+571 |         #difference between each price
+572 |         d_rate=0.05
+573 |         #number of price values
+574 |         d_number=int(np.trunc(np.log(p_max/p_min)/np.log(1+d_rate)))+1
+575 | 
+576 |         #average number of acceptances for each price
+577 |         S=np.ones([len(ID_set),d_number])*np.inf
+578 |         for r in range(len(ID_set)):
+579 |             p_tmp=p_max
+580 |             for k in range(d_number):
+581 |                 accept_sum=0
+582 |                 for [o_dist,to_am] in df_requesters[df_requesters[:,1]==ID_set[r]][:,[3,4]]:
+583 |                     if -S_a/to_am*p_tmp*o_dist+S_b>0:
+584 |                         if -S_a/to_am*p_tmp*o_dist+S_b<1:
+585 |                             accept_sum+=-S_a/to_am*p_tmp*o_dist+S_b
+586 |                         else:
+587 |                             accept_sum+=1
+588 |                 S[r,k]=accept_sum/len(df_requesters[df_requesters[:,1]==ID_set[r]][:,1])
+589 |                 p_tmp=p_tmp/(1+d_rate)
+590 | 
+591 |         #start first iteration
+592 |         #Calculate delta
+593 |         for r in range(len(ID_set)):
+594 |             dr_sum[r]=np.sum(df_requesters[:,3]*(df_requesters[:,1]==ID_set[r]))
+595 |             dr_Nr_sum=0
+596 |             r_count=0
+597 |             count=0
+598 |             while 1:
+599 |                 if df_requesters[count,1]==ID_set[r]:
+600 |                     dr_Nr_sum+=df_requesters[count,3]
+601 |                     r_count+=1
+602 |                 if r_count==Nr[r]+1:
+603 |                     Nr_plus_flag=1
+604 |                     break
+605 |                 count+=1
+606 |             value_tmp=0.0
+607 |             p_tmp=p_max
+608 |             d_count=0
+609 |             while p_tmp >= p_min:
+610 |                 C=dr_sum[r]
+611 |                 D=dr_Nr_sum
+612 |                 if value_tmp < np.amin([C*(p_tmp-alpha/s_taxi)*S[r,d_count],D*(p_tmp-alpha/s_taxi)]):
+613 |                     value_tmp=np.amin([C*(p_tmp-alpha/s_taxi)*S[r,d_count],D*(p_tmp-alpha/s_taxi)])
+614 |                     p_opt=p_tmp
+615 |                     opt_d_count=d_count
+616 |                 p_tmp=p_tmp/(1+d_rate)
+617 |                 d_count+=1
+618 |             delta_new[r]=(p_opt-alpha/s_taxi)*S[r,opt_d_count]-(p_current[r]-alpha/s_taxi)*S[r,int(current_count[r])]
+619 |             p_new[r]=p_opt
+620 |             new_count[r]=opt_d_count
+621 |             D_pre[r]=D
+622 | 
+623 |         #assume that it is possible to match a taxi with an requester within 2 km
+624 |         for i in range(num_requseters):
+625 |             for j in range(num_taxis):
+626 |                 if distance_ij_homogeneous[i,j]<=2.0:
+627 |                     edges[i].add(j)
+628 | 
+629 |         #Find an augmented path
+630 |         feasible_flag=False
+631 |         max_index=np.argmax(delta_new)
+632 |         for i in range(n):
+633 |             if df_requesters[i,1]==ID_set[max_index] and matched_r[i]==-1:
+634 |                 feasible_flag=dfs(i, set())
+635 |                 if feasible_flag==True:
+636 |                     matched_r[i]=1
+637 |                     break
+638 | 
+639 |         #If there is an augmented path, change the match and calculate new delta
+640 |         if feasible_flag==True:
+641 |             Nr[max_index]+=1
+642 |             p_current[max_index]=p_new[max_index]
+643 |             current_count[max_index]=new_count[max_index]
+644 |             value_tmp=0.0
+645 |             p_tmp=p_max
+646 |             d_count=0
+647 | 
+648 |             #line 18--21 in Algorithm 2 of tong's paper
+649 |             if Nr[max_index]+1<=Nr_max[max_index]:
+650 |                 C=dr_sum[max_index]
+651 |                 D=0
+652 |                 sum_num=0
+653 |                 for i in range(len(df_requesters[:,1])):
+654 |                     if sum_num > Nr[max_index]+1:
+655 |                         break
+656 |                     if df_requesters[i,1]==ID_set[max_index]:
+657 |                         D+=df_requesters[i,3]
+658 |                         sum_num+=1
+659 |                 while p_tmp >= p_min:
+660 |                     if value_tmp < np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)]):
+661 |                         value_tmp=np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)])
+662 |                         p_opt=p_tmp
+663 |                         opt_d_count=d_count
+664 |                     p_tmp=p_tmp/(1+d_rate)
+665 |                     d_count+=1
+666 |                 delta_new[max_index]=(p_opt-alpha/s_taxi)*S[max_index,opt_d_count]-(p_current[max_index]-alpha/s_taxi)*S[max_index,int(current_count[max_index])]
+667 |                 p_new[max_index]=p_opt
+668 |                 new_count[max_index]=opt_d_count
+669 |             #line 16--17 in Algorithm 2 of tong's paper
+670 |             else:
+671 |                 delta_new[max_index]=-1
+672 |                 p_new[max_index]=-1
+673 |                 new_count[max_index]=-1
+674 |         else:
+675 |             delta_new[max_index]=-1
+676 | 
+677 |         #second and subsequent iterations
+678 |         iter_num=0
+679 |         while 1:
+680 |             feasible_flag=False
+681 |             max_index=np.argmax(delta_new)
+682 |             if delta_new[max_index]<=0:
+683 |                 break
+684 |             for i in range(n):
+685 |                 if df_requesters[i,1]==ID_set[max_index] and matched_r[i]==-1:
+686 |                     feasible_flag=dfs(i, set())
+687 |                     if feasible_flag==True:
+688 |                         matched_r[i]=1
+689 |                     break
+690 |             if feasible_flag==True:
+691 |                 Nr[max_index]+=1
+692 |                 p_current[max_index]=p_new[max_index]
+693 |                 current_count[max_index]=new_count[max_index]
+694 |                 if Nr[max_index]+1<=Nr_max[max_index]:
+695 |                     value_tmp=0.0
+696 |                     p_tmp=p_max
+697 |                     d_count=0
+698 |                     C=dr_sum[max_index]
+699 |                     D=0
+700 |                     sum_num=0
+701 |                     for i in range(len(df_requesters[:,1])):
+702 |                         if sum_num > Nr[max_index]+1 or sum_num > Nr_max[max_index]:
+703 |                             break
+704 |                         if df_requesters[i,1]==ID_set[max_index]:
+705 |                             D+=df_requesters[i,3]
+706 |                             sum_num+=1
+707 |                     while p_tmp >= p_min:
+708 |                         if value_tmp < np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)]):
+709 |                             value_tmp=np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)])
+710 |                             p_opt=p_tmp
+711 |                             opt_d_count=d_count
+712 |                         p_tmp=p_tmp/(1+d_rate)
+713 |                         d_count+=1
+714 |                     delta_new[max_index]=(p_opt-alpha/s_taxi)*S[max_index,opt_d_count]-(p_current[max_index]-alpha/s_taxi)*S[max_index,int(current_count[max_index])]
+715 |                     p_new[max_index]=p_opt
+716 |                     new_count[max_index]=opt_d_count
+717 |                     D_pre[max_index]=D
+718 |                 else:
+719 |                     delta_new[max_index]=-1
+720 |                     p_new[max_index]=-1
+721 |                     new_count[max_index]=-1
+722 |             else:
+723 |                 delta_new[max_index]=-1
+724 |             iter_num+=1
+725 | 
+726 |         #set the price
+727 |         price_MAPS=np.zeros(n)
+728 |         for i in range(n):
+729 |             r=df_requesters[i,1]
+730 |             for h in range(len(ID_set)):
+731 |                 if ID_set[h]==r:
+732 |                     price_MAPS[i]=p_current[h]*df_requesters[i,3]
+733 |                     break
+734 |         computation_time_MAPS=time.time()-start_time1
+735 | 
+736 |         #start LinUCB
+737 |         start_time2=time.time()
+738 | 
+739 |         df_ID=df_loc[df_loc["borough"] == place]
+740 |         PUID_set=list(set(df_ID.values[:,4]))
+741 |         DOID_set =list(set(df_ID.values[:,4]))
+742 | 
+743 |         price_LinUCB=np.zeros([n,1])
+744 |         Acceptance_probability_LinUCB=np.zeros([n,1])
+745 | 
+746 |         hour_onehot=np.zeros(10)
+747 |         hour_onehot[hour-10]=1
+748 |         max_arm=np.ones(n)*(-1)
+749 | 
+750 |         #line 4 in Algorithm 1 of chu's paper
+751 |         theta_0=np.linalg.solve(A_0,b_0)
+752 |         theta_1=np.linalg.solve(A_1,b_1)
+753 |         theta_2=np.linalg.solve(A_2,b_2)
+754 |         theta_3=np.linalg.solve(A_3,b_3)
+755 |         theta_4=np.linalg.solve(A_4,b_4)
+756 | 
+757 |         #make features X (line 5 in Algorithm 1 of chu's paper)
+758 |         for i in range(df_requesters.shape[0]):
+759 |             PUID_onehot=np.zeros(len(PUID_set))
+760 |             for j in range(len(PUID_set)):
+761 |                 if df_requesters[i,1]==PUID_set[j]:
+762 |                     PUID_onehot[j]=1
+763 |             DOID_onehot=np.zeros(len(DOID_set))
+764 |             for j in range(len(DOID_set)):
+765 |                 if df_requesters[i,2]==DOID_set[j]:
+766 |                     DOID_onehot[j]=1
+767 |             X=np.hstack([hour_onehot,PUID_onehot,DOID_onehot,df_requesters[i,3],df_requesters[i,5]])
+768 | 
+769 |             #line 7 and 9 in Algorithm 1 of chu's paper
+770 |             p_0=np.inner(theta_0,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_0,X)))
+771 |             max_p=p_0
+772 |             max_arm[i]=0
+773 |             p_1=np.inner(theta_1,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_1,X)))
+774 |             if p_1>max_p:
+775 |                 max_p=p_1
+776 |                 max_arm[i]=1
+777 |             p_2=np.inner(theta_2,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_2,X)))
+778 |             if p_2>max_p:
+779 |                 max_p=p_2
+780 |                 max_arm[i]=2
+781 |             p_3=np.inner(theta_3,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_3,X)))
+782 |             if p_3>max_p:
+783 |                 max_p=p_3
+784 |                 max_arm[i]=3
+785 |             p_4=np.inner(theta_4,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_4,X)))
+786 |             if p_4>max_p:
+787 |                 max_p=p_4
+788 |                 max_arm[i]=4
+789 | 
+790 |             price_LinUCB[i]=arm_price[int(max_arm[i])]*df_requesters[i,3]
+791 |             Acceptance_probability_LinUCB[i]=-2.0/df_requesters[i,4]*price_LinUCB[i]+3
+792 | 
+793 |         #line 10 in Algorithm 1 of chu's paper
+794 |         a_LinUCB=np.zeros(n)
+795 |         for i in range(n):
+796 |             tmp=np.random.rand()
+797 |             if tmp < Acceptance_probability_LinUCB[i]:
+798 |                 a_LinUCB[i]=1
+799 |         [opt_value_LinUCB,matched_edges_LinUCB,reward_LinUCB]=value_eval(price_LinUCB,a_LinUCB)
+800 | 
+801 |         #line 11 and 12 in Algorithm 1 of chu's paper
+802 |         for i in range(df_requesters.shape[0]):
+803 |             PUID_onehot=np.zeros(len(PUID_set))
+804 |             for j in range(len(PUID_set)):
+805 |                 if df_requesters[i,1]==PUID_set[j]:
+806 |                     PUID_onehot[j]=1
+807 |             DOID_onehot=np.zeros(len(DOID_set))
+808 |             for j in range(len(DOID_set)):
+809 |                 if df_requesters[i,2]==DOID_set[j]:
+810 |                     DOID_onehot[j]=1
+811 |             X=np.hstack([hour_onehot,PUID_onehot,DOID_onehot,df_requesters[i,3],df_requesters[i,5]])
+812 |             if max_arm[i]==0:
+813 |                 A_0+=np.outer(X, X)
+814 |                 b_0+=X*reward_LinUCB[i]
+815 |             elif max_arm[i]==1:
+816 |                 A_1+=np.outer(X, X)
+817 |                 b_1+=X*reward_LinUCB[i]
+818 |             elif max_arm[i]==2:
+819 |                 A_2+=np.outer(X, X)
+820 |                 b_2+=X*reward_LinUCB[i]
+821 |             elif max_arm[i]==3:
+822 |                 A_3+=np.outer(X, X)
+823 |                 b_3+=X*reward_LinUCB[i]
+824 |             elif max_arm[i]==4:
+825 |                 A_4+=np.outer(X, X)
+826 |                 b_4+=X*reward_LinUCB[i]
+827 |         computation_time_LinUCB=time.time()-start_time2
+828 | 
+829 | 
+830 |         #compute the result for each method
+831 |         objective_value_proposed_list=np.zeros(num_eval)
+832 |         objective_value_MAPS_list=np.zeros(num_eval)
+833 |         objective_value_LinUCB_list=np.zeros(num_eval)
+834 | 
+835 |         Acceptance_probability_proposed=-2.0/df_requesters[:,4]*price_proposed+3
+836 |         Acceptance_probability_MAPS=-2.0/df_requesters[:,4]*price_MAPS+3
+837 | 
+838 |         for k in range(num_eval):
+839 |                 a_proposed=np.zeros(n)
+840 |                 a_MAPS=np.zeros(n)
+841 |                 a_LinUCB=np.zeros(n)
+842 |                 for i in range(n):
+843 |                     tmp=np.random.rand()
+844 |                     if tmp < Acceptance_probability_proposed[i]:
+845 |                         a_proposed[i]=1
+846 |                     if tmp < Acceptance_probability_MAPS[i]:
+847 |                         a_MAPS[i]=1
+848 |                     if tmp < Acceptance_probability_LinUCB[i]:
+849 |                         a_LinUCB[i]=1
+850 |                 [opt_value,matched_edges,reward]=value_eval(price_proposed,a_proposed)
+851 |                 objective_value_proposed_list[k]=opt_value
+852 |                 [opt_value_MAPS,matched_edges_MAPS,reward]=value_eval(price_MAPS,a_MAPS)
+853 |                 objective_value_MAPS_list[k]=opt_value_MAPS
+854 |                 [opt_value_LinUCB,matched_edges_LinUCB,reward_LinUCB]=value_eval(price_LinUCB,a_LinUCB)
+855 |                 objective_value_LinUCB_list[k]=opt_value_LinUCB
+856 | 
+857 |         np.append(objective_value_proposed_list,np.average(objective_value_proposed_list))
+858 |         np.append(objective_value_MAPS_list,np.average(objective_value_MAPS_list))
+859 |         np.append(objective_value_LinUCB_list,np.average(objective_value_LinUCB_list))
+860 | 
+861 |         time_proposed_list.append(computation_time_proposed)
+862 |         time_MAPS_list.append(computation_time_MAPS)
+863 |         time_LinUCB_list.append(computation_time_LinUCB)
+864 | 
+865 |     print(tt_tmp+1, '/', simulataion_range, 'iterations end')
+866 | 
+867 | with open('../results/Average_result_PL_place=%s_day=%s_interval=%f%s.csv'%(place, day, time_interval ,time_unit), mode='w') as Flow:
+868 |     writer = csv.writer(Flow)
+869 |     writer.writerow([np.average(objective_value_proposed_list),np.average(time_proposed_list)])
+870 |     writer.writerow([np.average(objective_value_MAPS_list),np.average(time_MAPS_list)])
+871 |     writer.writerow([np.average(objective_value_LinUCB_list),np.average(time_LinUCB_list)])
+872 | 
+
+
+--------------------------------------------------------------------------------
+/Rideshare_experiment/bin/experiment_Sigmoid.py:
+--------------------------------------------------------------------------------
+  1 | import pandas as pd
+  2 | import numpy as np
+  3 | import urllib.request
+  4 | import zipfile
+  5 | import random
+  6 | import itertools
+  7 | import math
+  8 | import scipy.special as spys
+  9 | import networkx as nx
+ 10 | from networkx.algorithms import bipartite
+ 11 | import itertools
+ 12 | import time
+ 13 | import pyproj
+ 14 | grs80 = pyproj.Geod(ellps='GRS80')
+ 15 | import shapefile
+ 16 | import shapely
+ 17 | from descartes.patch import PolygonPatch
+ 18 | import matplotlib as mpl
+ 19 | import matplotlib.pyplot as plt
+ 20 | from scipy.spatial import distance_matrix
+ 21 | import datetime
+ 22 | import collections
+ 23 | import csv
+ 24 | import pickle
+ 25 | import os
+ 26 | import sys
+ 27 | 
+ 28 | #Setting
+ 29 | #input parameters
+ 30 | args=sys.argv
+ 31 | place=args[1]
+ 32 | day=int(args[2])
+ 33 | time_interval=int(args[3])
+ 34 | time_unit=args[4]
+ 35 | simulataion_range=int(args[5])
+ 36 | 
+ 37 | #given constant parameters
+ 38 | year=2019
+ 39 | month=10
+ 40 | #number of simulations to calculate an approximated objective value
+ 41 | num_eval=100
+ 42 | #allowable error
+ 43 | epsilon=10**-10
+ 44 | #parameters to set w_uv
+ 45 | alpha=18
+ 46 | s_taxi=25
+ 47 | #parameters to calculate acceptance probability
+ 48 | beta=1.3
+ 49 | gamma=(0.3*np.sqrt(3)/np.pi).astype(np.float64)
+ 50 | #parameters for the existing method, LinUCB
+ 51 | UCB_alpha=0.5
+ 52 | base_price=5.875
+ 53 | a=np.array([0.6,0.8,1,1.2,1.4])
+ 54 | arm_price=base_price*a
+ 55 | 
+ 56 | #make dist_matrix, which includes the distance between each area
+ 57 | df_loc=pd.read_csv("../data/area_information.csv")
+ 58 | tu_data=df_loc.values[:,6:8]
+ 59 | dist_matrix = np.zeros([df_loc.values[:,6:8].shape[0],df_loc.values[:,6:8].shape[0]])
+ 60 | for i in range(df_loc.values[:,6:8].shape[0]):
+ 61 |     for j in range(df_loc.values[:,6:8].shape[0]):
+ 62 |         azimuth, bkw_azimuth, distance = grs80.inv(tu_data[i,0], tu_data[i,1], tu_data[j,0], tu_data[j,1])
+ 63 |         dist_matrix[i,j]=distance
+ 64 | dist_matrix=dist_matrix*0.001
+ 65 | 
+ 66 | df_ID=df_loc[df_loc["borough"] == place]
+ 67 | PUID_set=list(set(df_ID.values[:,4]))
+ 68 | DOID_set =list(set(df_ID.values[:,4]))
+ 69 | 
+ 70 | #download trained matrices and vectors for the existing method, LinUCB
+ 71 | with open('../work/learned_matrix_Sigmoid/201908_%s/A_0_08' % place, 'rb') as web:
+ 72 |     A_0 = pickle.load(web)
+ 73 | with open('../work/learned_matrix_Sigmoid/201909_%s/A_0_09' % place, 'rb') as web:
+ 74 |     A_0 += pickle.load(web)
+ 75 | with open('../work/learned_matrix_Sigmoid/201907_%s/A_0_07' % place, 'rb') as web:
+ 76 |     A_0 += pickle.load(web)
+ 77 | A_0+=np.eye(A_0.shape[0])
+ 78 | with open('../work/learned_matrix_Sigmoid/201908_%s/A_1_08' % place, 'rb') as web:
+ 79 |     A_1 = pickle.load(web)
+ 80 | with open('../work/learned_matrix_Sigmoid/201909_%s/A_1_09' % place, 'rb') as web:
+ 81 |     A_1 += pickle.load(web)
+ 82 | with open('../work/learned_matrix_Sigmoid/201907_%s/A_1_07' % place, 'rb') as web:
+ 83 |     A_1 += pickle.load(web)
+ 84 | A_1+=np.eye(A_0.shape[0])
+ 85 | with open('../work/learned_matrix_Sigmoid/201908_%s/A_2_08' % place, 'rb') as web:
+ 86 |     A_2 = pickle.load(web)
+ 87 | with open('../work/learned_matrix_Sigmoid/201909_%s/A_2_09' % place, 'rb') as web:
+ 88 |     A_2 += pickle.load(web)
+ 89 | with open('../work/learned_matrix_Sigmoid/201907_%s/A_2_07' % place, 'rb') as web:
+ 90 |     A_2 += pickle.load(web)
+ 91 | A_2+=np.eye(A_0.shape[0])
+ 92 | with open('../work/learned_matrix_Sigmoid/201908_%s/A_3_08' % place, 'rb') as web:
+ 93 |     A_3 = pickle.load(web)
+ 94 | with open('../work/learned_matrix_Sigmoid/201909_%s/A_3_09' % place, 'rb') as web:
+ 95 |     A_3 += pickle.load(web)
+ 96 | with open('../work/learned_matrix_Sigmoid/201907_%s/A_3_07' % place, 'rb') as web:
+ 97 |     A_3 += pickle.load(web)
+ 98 | A_3+=np.eye(A_0.shape[0])
+ 99 | with open('../work/learned_matrix_Sigmoid/201908_%s/A_4_08' % place, 'rb') as web:
+100 |     A_4 = pickle.load(web)
+101 | with open('../work/learned_matrix_Sigmoid/201909_%s/A_4_09' % place, 'rb') as web:
+102 |     A_4 += pickle.load(web)
+103 | with open('../work/learned_matrix_Sigmoid/201907_%s/A_4_07' % place, 'rb') as web:
+104 |     A_4 += pickle.load(web)
+105 | A_4+=np.eye(A_0.shape[0])
+106 | with open('../work/learned_matrix_Sigmoid/201908_%s/b_0_08' % place, 'rb') as web:
+107 |     b_0 = pickle.load(web)
+108 | with open('../work/learned_matrix_Sigmoid/201909_%s/b_0_09' % place, 'rb') as web:
+109 |     b_0 += pickle.load(web)
+110 | with open('../work/learned_matrix_Sigmoid/201907_%s/b_0_07' % place, 'rb') as web:
+111 |     b_0 += pickle.load(web)
+112 | with open('../work/learned_matrix_Sigmoid/201908_%s/b_1_08' % place, 'rb') as web:
+113 |     b_1 = pickle.load(web)
+114 | with open('../work/learned_matrix_Sigmoid/201909_%s/b_1_09' % place, 'rb') as web:
+115 |     b_1 += pickle.load(web)
+116 | with open('../work/learned_matrix_Sigmoid/201907_%s/b_1_07' % place, 'rb') as web:
+117 |     b_1 += pickle.load(web)
+118 | with open('../work/learned_matrix_Sigmoid/201908_%s/b_2_08' % place, 'rb') as web:
+119 |     b_2 = pickle.load(web)
+120 | with open('../work/learned_matrix_Sigmoid/201909_%s/b_2_09' % place, 'rb') as web:
+121 |     b_2 += pickle.load(web)
+122 | with open('../work/learned_matrix_Sigmoid/201907_%s/b_2_07' % place, 'rb') as web:
+123 |     b_2 += pickle.load(web)
+124 | with open('../work/learned_matrix_Sigmoid/201908_%s/b_3_08' % place, 'rb') as web:
+125 |     b_3 = pickle.load(web)
+126 | with open('../work/learned_matrix_Sigmoid/201909_%s/b_3_09' % place, 'rb') as web:
+127 |     b_3 += pickle.load(web)
+128 | with open('../work/learned_matrix_Sigmoid/201907_%s/b_3_07' % place, 'rb') as web:
+129 |     b_3 += pickle.load(web)
+130 | with open('../work/learned_matrix_Sigmoid/201908_%s/b_4_08' % place, 'rb') as web:
+131 |     b_4 = pickle.load(web)
+132 | with open('../work/learned_matrix_Sigmoid/201909_%s/b_4_09' % place, 'rb') as web:
+133 |     b_4 += pickle.load(web)
+134 | with open('../work/learned_matrix_Sigmoid/201907_%s/b_4_07' % place, 'rb') as web:
+135 |     b_4 += pickle.load(web)
+136 | 
+137 | #Preprocessing of the data
+138 | hour_start=10
+139 | hour_end=20
+140 | minute_0=0
+141 | second_0=0
+142 | day_start_time=datetime.datetime(year,month,day,hour_start-1,minute_0+55,second_0)
+143 | day_end_time=datetime.datetime(year,month,day,hour_end,minute_0+5,second_0)
+144 | df = pd.read_csv("../data/green_tripdata_2019-10.csv",parse_dates=['lpep_pickup_datetime','lpep_dropoff_datetime'])
+145 | df=df[['lpep_pickup_datetime','lpep_dropoff_datetime','PULocationID', 'DOLocationID','trip_distance','total_amount']]
+146 | df=pd.merge(df, df_loc, how="inner" ,left_on="PULocationID",right_on="LocationID")
+147 | df=df[(df["trip_distance"] >10**(-3))&(df["total_amount"] >10**(-3))&(df["borough"] == place)&(df["PULocationID"] < 264)&(df["DOLocationID"] < 264)&(df["lpep_pickup_datetime"] > day_start_time)& (df["lpep_pickup_datetime"] < day_end_time)]
+148 | green_tripdata=df[['borough','PULocationID', 'DOLocationID','trip_distance','total_amount','lpep_pickup_datetime','lpep_dropoff_datetime']]
+149 | df = pd.read_csv("../data/yellow_tripdata_2019-10.csv",parse_dates=['tpep_pickup_datetime','tpep_dropoff_datetime'])
+150 | df=pd.merge(df, df_loc, how="inner" ,left_on="PULocationID",right_on="LocationID")
+151 | df=df[(df["trip_distance"] >10**(-3))&(df["total_amount"] >10**(-3))&(df["borough"] == place)&(df["PULocationID"] < 264)&(df["DOLocationID"] < 264)&(df["tpep_pickup_datetime"] > day_start_time)& (df["tpep_pickup_datetime"] < day_end_time)]
+152 | yellow_tripdata=df[['borough','PULocationID', 'DOLocationID','trip_distance','total_amount','tpep_pickup_datetime','tpep_dropoff_datetime']]
+153 | 
+154 | #define functions used in the proposed method
+155 | def val_calc(gamma,beta,to_am,F_i,delta,p_flag):
+156 |     if p_flag==1:
+157 |         if F_i!=0:
+158 |             if 1-(F_i+delta)>0:
+159 |                 val = (gamma*to_am*np.log((F_i+delta)/(1-(F_i+delta)))*(F_i+delta)-beta*to_am*(F_i+delta)-(gamma*to_am*np.log(F_i/(1-F_i))*F_i-beta*to_am*F_i))/delta #delta流した時の1単位あたりのコスト
+160 |             else:
+161 |                 val= np.infty
+162 |         else:
+163 |             if 1-(F_i+delta)>0:
+164 |                 val = (gamma*to_am*np.log((F_i+delta)/(1-(F_i+delta)))*(F_i+delta)-beta*to_am*(F_i+delta))/delta
+165 |             else:
+166 |                 val= np.infty
+167 |     else:
+168 |         if F_i-delta>0:
+169 |             if F_i!=0:
+170 |                 if 1>F_i-delta:
+171 |                     val = (gamma*to_am*np.log((F_i-delta)/(1-(F_i-delta)))*(F_i-delta)-beta*to_am*(F_i-delta)-(gamma*to_am*np.log(F_i/(1-F_i))*F_i-beta*to_am*F_i))/delta #delta流した時の1単位あたりのコスト
+172 |                 else:
+173 |                     val= np.infty
+174 |             else:
+175 |                 if 1-(F_i-delta)>0:
+176 |                     val = (gamma*to_am*np.log((F_i-delta)/(1-(F_i-delta)))*(F_i-delta)-beta*to_am*(F_i-delta))/delta
+177 |                 else:
+178 |                     val= np.infty
+179 |         elif F_i-delta==0:
+180 |             val = (0-(gamma*to_am*np.log(F_i/(1-F_i))*F_i-beta*to_am*F_i))/delta
+181 |         else:
+182 |             val=np.infty
+183 |     return val
+184 | 
+185 | def get_target_min_index(min_index, distance, unsearched_nodes):
+186 |     start = 0
+187 |     while True:
+188 |         index = distance.index(min_index, start)
+189 |         found = index in unsearched_nodes
+190 |         if found:
+191 |             return index
+192 |         else:
+193 |             start = index + 1
+194 | 
+195 | def dfs(v, visited):
+196 |     for u in edges[v]:
+197 |         if u in visited:
+198 |             continue
+199 |         visited.add(u)
+200 |         if matched[u] == -1 or dfs(matched[u], visited):
+201 |             matched[u] = v
+202 |             return True
+203 |     return False
+204 | 
+205 | #define the function calculateing the objectives value for a given price and acceptance results
+206 | def value_eval(P,acceptance_results):
+207 |     group1 = range(n)
+208 |     group2 = range(n,n+m)
+209 |     g_post = nx.Graph()
+210 |     g_post.add_nodes_from(group1, bipartite=1)
+211 |     g_post.add_nodes_from(group2, bipartite=0)
+212 |     for i in range(n):
+213 |         if acceptance_results[i]==1:
+214 |             for j in range(m):
+215 |                 val = P[i]+W[i,j]
+216 |                 g_post.add_edge(i, j+n, weight=val)
+217 |     matched_edges = nx.max_weight_matching(g_post)
+218 |     opt_value=0.0
+219 |     reward=np.zeros(n)
+220 |     for (i, j) in matched_edges:
+221 |         if i>j:
+222 |             jtmp=j
+223 |             j=i-n
+224 |             i=jtmp
+225 |         else:
+226 |             j=j-n
+227 |         opt_value+=P[i]+W[i,j]
+228 |         reward[i]=P[i].item()+W[i,j]
+229 | 
+230 |     return [opt_value,matched_edges,reward]
+231 | 
+232 | # Lists to store results
+233 | average_objective_value_proposed_list=[]
+234 | average_objective_value_MAPS_list=[]
+235 | average_objective_value_LinUCB_list=[]
+236 | 
+237 | computation_time_proposed_vec=[]
+238 | computation_time_MAPS_vec=[]
+239 | computation_time_LinUCB_vec=[]
+240 | 
+241 | 
+242 | for tt_tmp in range(simulataion_range):
+243 |     #make simulation data
+244 |     tt=tt_tmp*5
+245 |     h,m=divmod(tt,60)
+246 |     hour=10+h
+247 |     minute=m
+248 |     second=0
+249 |     set_time=datetime.datetime(year,month,day,hour,minute,second)
+250 |     if time_unit=='m':
+251 |         if minute+time_interval<60:
+252 |             after_time=datetime.datetime(year,month,day,hour,minute+time_interval,second)
+253 |         else:
+254 |             after_time=datetime.datetime(year,month,day,hour+1,minute+time_interval-60,second)
+255 |     if time_unit=='s':
+256 |             after_time=datetime.datetime(year,month,day,hour,minute,second+time_interval)
+257 |     green_tripdata_target_requesters=green_tripdata[(green_tripdata["lpep_pickup_datetime"] > set_time)& (green_tripdata["lpep_pickup_datetime"] < after_time)]
+258 |     yellow_tripdata_target_requesters=yellow_tripdata[(yellow_tripdata["tpep_pickup_datetime"] > set_time)& (yellow_tripdata["tpep_pickup_datetime"] < after_time)]
+259 |     green_tripdata_target_taxis=green_tripdata[(green_tripdata["lpep_dropoff_datetime"] > set_time)& (green_tripdata["lpep_dropoff_datetime"] < after_time)]
+260 |     yellow_tripdata_target_taxis=yellow_tripdata[(yellow_tripdata["tpep_dropoff_datetime"] > set_time)& (yellow_tripdata["tpep_dropoff_datetime"] < after_time)]
+261 |     df_requesters=np.concatenate([green_tripdata_target_requesters.values, yellow_tripdata_target_requesters.values])
+262 |     df_taxis=np.concatenate([green_tripdata_target_taxis.values, yellow_tripdata_target_taxis.values])[:,2]
+263 |     time_consume=np.zeros([df_requesters.shape[0],1])
+264 |     for i in range(df_requesters.shape[0]):
+265 |         time_consume[i]=(df_requesters[i,6]-df_requesters[i,5]).seconds
+266 |     df_requesters=np.hstack([df_requesters[:,0:5],time_consume])
+267 | 
+268 |     #delete data with too little distance traveled
+269 |     df_requesters=df_requesters[df_requesters[:,3]>10**-3]
+270 |     df_requesters=df_requesters[df_requesters[:,4]>10**-3]
+271 |     #Sort by distance in descending order, as required by the existing MAPS method
+272 |     df_requesters=df_requesters[np.argsort(df_requesters[:,3])]
+273 |     #Convert units of distance to km
+274 |     df_requesters[:,3]=df_requesters[:,3]*1.60934
+275 | 
+276 |     requester_pickup_location_x=tu_data[df_requesters[:,1].astype('int64')-1,0].reshape((df_requesters.shape[0],1))+np.random.normal(0, 0.00306, (df_requesters.shape[0], 1))
+277 |     requester_pickup_location_y=tu_data[df_requesters[:,1].astype('int64')-1,1].reshape((df_requesters.shape[0],1))+np.random.normal(0, 0.000896, (df_requesters.shape[0], 1))
+278 |     taxi_location_x=tu_data[df_taxis.astype('int64')-1,0].reshape((df_taxis.shape[0],1))+np.random.normal(0, 0.00306, (df_taxis.shape[0], 1))
+279 |     taxi_location_y=tu_data[df_taxis.astype('int64')-1,1].reshape((df_taxis.shape[0],1))+np.random.normal(0, 0.000896, (df_taxis.shape[0], 1))
+280 | 
+281 |     n=df_requesters.shape[0]
+282 |     m=df_taxis.size
+283 | 
+284 |     if n!=0 and m!=0:
+285 |         #calculate distances between requesters and taxis
+286 |         distance_ij=np.zeros((df_requesters.shape[0],df_taxis.size))
+287 |         for i in range(df_requesters.shape[0]):
+288 |             for j in range(df_taxis.size):
+289 |                 azimuth, bkw_azimuth, distance = grs80.inv(requester_pickup_location_x[i], requester_pickup_location_y[i], taxi_location_x[j],taxi_location_y[j])
+290 |                 distance_ij[i,j]=distance.item()*0.001
+291 |         #calculate edge weights from distances between requesters and taxis
+292 |         W=np.zeros((df_requesters.shape[0],df_taxis.size))
+293 |         Cost_matrix=np.ones([n+m+2,n+m+2])*np.inf
+294 |         for i in range(df_requesters.shape[0]):
+295 |             for j in range(df_taxis.size):
+296 |                 W[i,j]=-(distance_ij[i,j]+df_requesters[i,3])/s_taxi*alpha
+297 |                 Cost_matrix[i,n+j]=-W[i,j]
+298 |                 Cost_matrix[n+j,i]=W[i,j]
+299 | 
+300 |         #start proposed method
+301 |         start_time=time.time()
+302 |         #generate the graph of min-cost flow problem
+303 |         G = nx.DiGraph()
+304 |         #add nodes
+305 |         #n
+306 |         G.add_nodes_from(range(n))
+307 |         #v
+308 |         G.add_nodes_from(range(n,n+m))
+309 |         #s
+310 |         G.add_node(n+m)
+311 |         #t
+312 |         G.add_node(n+m+1)
+313 | 
+314 |         #Set quantities that do not match flow constraints (, that is, equations (3)--(5) in our paper)
+315 |         excess=np.zeros(n+m+2)
+316 |         excess[n+m]=n
+317 |         excess[n+m+1]=-n
+318 | 
+319 |         Flow=np.zeros([n+m+2,n+m+2])
+320 |         potential=np.zeros(n+m+2)
+321 | 
+322 |         #Cap_matrix representing the remaining capacity of each edge
+323 |         Cap_matrix=np.zeros([n+m+2,n+m+2])
+324 |         for i in range(n):
+325 |             for j in range(m):
+326 |                 G.add_edge(i, n+j)
+327 |                 Cap_matrix[i, n+j]=np.inf
+328 |                 G.add_edge(n+j,i)
+329 | 
+330 |         for i in range(n):
+331 |             val=np.infty
+332 |             G.add_edge(n+m,i)
+333 |             Cap_matrix[n+m,i]=0.5
+334 |             Cap_matrix[i,n+m]=0.5
+335 |             Cost_matrix[n+m,i]=val
+336 |             excess[i]+=0.5
+337 |             excess[n+m]-=0.5
+338 |             Flow[n+m,i]=0.5
+339 |             G.add_edge(i,n+m)
+340 |         for j in range(m):
+341 |             G.add_edge(n+j,n+m+1)
+342 |             Cap_matrix[n+j,n+m+1]=1
+343 |             Cost_matrix[n+j,n+m+1]=0
+344 |             G.add_edge(n+m+1,n+j)
+345 |             Cost_matrix[n+m+1,n+j]=0
+346 |         G.add_edge(n+m,n+m+1)
+347 |         Cap_matrix[n+m,n+m+1]=n
+348 |         Cost_matrix[n+m,n+m+1]=0
+349 |         G.add_edge(n+m+1,n+m)
+350 |         Cap_matrix[n+m+1,n+m]=0
+351 |         Cost_matrix[n+m+1,n+m]=0
+352 | 
+353 |         #set the amount of delta (amount to adjust current flow)
+354 |         delta=n
+355 | 
+356 |         #2nd and subsequent iterations
+357 |         while delta>0.001:
+358 |             for i in range(n):
+359 |                 for j in range (m):
+360 |                     if Cost_matrix[i,n+j]-potential[i]+potential[n+j] < -epsilon and Cap_matrix[i,n+j]>=delta:
+361 |                         Flow[i,n+j]+=delta
+362 |                         excess[i] -= delta
+363 |                         excess[n+j] += delta
+364 |                         Cap_matrix[i,n+j]-=delta
+365 |                         Cap_matrix[n+j,i]+=delta
+366 | 
+367 |                     if Cost_matrix[n+j,i]-potential[n+j]+potential[i] < -epsilon and Cap_matrix[n+j,i]>=delta:
+368 |                         Flow[i,n+j]-=delta
+369 |                         excess[i] += delta
+370 |                         excess[n+j] -= delta
+371 |                         Cap_matrix[i,n+j]+=delta
+372 |                         Cap_matrix[n+j,i]-=delta
+373 | 
+374 |             for i in range(n):
+375 |                 if Cost_matrix[n+m,i]-potential[n+m]+potential[i] < -epsilon and Cap_matrix[n+m,i]>=delta:
+376 |                     Flow[n+m,i]+=delta
+377 |                     excess[n+m] -= delta
+378 |                     excess[i] += delta
+379 |                     Cap_matrix[n+m,i]-=delta
+380 |                     Cap_matrix[i,n+m]+=delta
+381 |                     if Flow[n+m,i]!=0:
+382 |                         Cost_matrix[n+m,i]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,1)
+383 |                         Cost_matrix[i,n+m]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,-1)
+384 |                 if Cost_matrix[i,n+m]-potential[i]+potential[n+m] < -epsilon and Cap_matrix[i,n+m]>=delta:
+385 |                     Flow[n+m,i]-=delta
+386 |                     excess[n+m] += delta
+387 |                     excess[i] -= delta
+388 |                     Cap_matrix[n+m,i]+=delta
+389 |                     Cap_matrix[i,n+m]-=delta
+390 |                     Cost_matrix[n+m,i]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,1)
+391 |                     Cost_matrix[i,n+m]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,-1)
+392 | 
+393 |             # j-t
+394 |             for j in range (m):
+395 |                 if -potential[n+j]+potential[n+m+1] < -epsilon and Cap_matrix[n+j,n+m+1]>=delta:
+396 |                     Flow[n+j,n+m+1]+=delta
+397 |                     excess[n+j] -= delta
+398 |                     excess[n+m+1] += delta
+399 |                     Cap_matrix[n+j,n+m+1]-=delta
+400 |                     Cap_matrix[n+m+1,n+j]+=delta
+401 |                 if -potential[n+m+1]+potential[n+j] < -epsilon and Cap_matrix[n+m+1,n+j]>=delta:
+402 |                     Flow[n+j,n+m+1]-=delta
+403 |                     excess[n+m+1] -= delta
+404 |                     excess[n+j] += delta
+405 |                     Cap_matrix[n+j,n+m+1]+=delta
+406 |                     Cap_matrix[n+m+1,n+j]-=delta
+407 |             # s-t
+408 |             if -potential[n+m]+potential[n+m+1] < -epsilon and Cap_matrix[n+m,n+m+1]>=delta:
+409 |                 Flow[n+m,n+m+1]+=delta
+410 |                 excess[n+m] -= delta
+411 |                 excess[n+m+1] += delta
+412 |                 Cap_matrix[n+m,n+m+1]-=delta
+413 |                 Cap_matrix[n+m+1,n+m]+=delta
+414 | 
+415 |             if -potential[n+m+1]+potential[n+m] < -epsilon and Cap_matrix[n+m+1,n+m]>=delta:
+416 |                 Flow[n+m,n+m+1]-=delta
+417 |                 excess[n+m+1] -= delta
+418 |                 excess[n+m] += delta
+419 |                 Cap_matrix[n+m,n+m+1]+=delta
+420 |                 Cap_matrix[n+m+1,n+m]-=delta
+421 | 
+422 |             # short path phase
+423 |             while len(list(*np.where(excess >= delta)))>0 and len(list(*np.where(excess <= -delta)))>0:
+424 |                 start_node=list(*np.where(excess >= delta))[0]
+425 |                 node_num = n+m+2
+426 |                 unsearched_nodes = list(range(node_num))
+427 |                 distance = [math.inf] * node_num
+428 |                 previous_nodes = [-1] * node_num
+429 |                 distance[start_node] = 0
+430 |                 searched_nodes=[]
+431 |                 while(len(unsearched_nodes) != 0):
+432 |                     posible_min_distance = math.inf
+433 |                     for node_index in unsearched_nodes:
+434 |                         if posible_min_distance > distance[node_index]:
+435 |                             posible_min_distance = distance[node_index]
+436 |                     target_min_index = get_target_min_index(posible_min_distance, distance, unsearched_nodes)
+437 |                     unsearched_nodes.remove(target_min_index)
+438 |                     searched_nodes.append(target_min_index)
+439 |                     if excess[target_min_index] <= -delta:
+440 |                         end_node=target_min_index
+441 |                         break
+442 |                     neighbor_node_list = list(G.succ[target_min_index])
+443 |                     for neighbor_node in neighbor_node_list:
+444 |                         if distance[neighbor_node] - epsilon > distance[target_min_index] + Cost_matrix[target_min_index,neighbor_node] -potential[target_min_index]+potential[neighbor_node] and Cap_matrix[target_min_index,neighbor_node] >= delta:
+445 |                             distance[neighbor_node] = distance[target_min_index] + Cost_matrix[target_min_index,neighbor_node]-potential[target_min_index]+potential[neighbor_node] # 過去に設定されたdistanceよりも小さい場合はdistanceを更新
+446 |                             previous_nodes[neighbor_node] =  target_min_index
+447 |                 for i in range(n+m+2):
+448 |                     if i in searched_nodes:
+449 |                         potential[i] -= distance[i]
+450 |                     else:
+451 |                         potential[i] -= distance[end_node]
+452 |                 tmp_node=end_node
+453 |                 x=0
+454 |                 while tmp_node!=start_node:
+455 |                     Flow[previous_nodes[tmp_node],tmp_node]+=delta
+456 |                     Cap_matrix[previous_nodes[tmp_node],tmp_node] -= delta
+457 |                     Cap_matrix[tmp_node,previous_nodes[tmp_node]] += delta
+458 |                     tmp_node=previous_nodes[tmp_node]
+459 |                 for i in range(n):
+460 |                     Cost_matrix[n+m,i]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,1)
+461 |                     Cost_matrix[i,n+m]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,-1)
+462 |                 excess[start_node]-=delta
+463 |                 excess[end_node]+=delta
+464 |             delta=0.5*delta
+465 |             for i in range(n):
+466 |                 Cost_matrix[n+m,i]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,1)
+467 |                 Cost_matrix[i,n+m]=val_calc(gamma,beta,df_requesters[i,4],Flow[n+m,i],delta,-1)
+468 | 
+469 |         #Calculate the price corresponding to the flow
+470 |         price_proposed=np.zeros(n)
+471 |         for i in range(n):
+472 |             price_proposed[i]=-gamma*df_requesters[i,4]*np.log(Flow[n+m,i]/(1-Flow[n+m,i]))+beta*df_requesters[i,4]
+473 |         computation_time_proposed=time.time()-start_time
+474 | 
+475 |         #start MAPS method
+476 |         #MAPS considers each area's requester to be the same.
+477 |         req_pu_loc_x_2=tu_data[df_requesters[:,1].astype('int64')-1,0].reshape((df_requesters.shape[0],1))
+478 |         req_pu_loc_y_2=tu_data[df_requesters[:,1].astype('int64')-1,1].reshape((df_requesters.shape[0],1))
+479 |         work_loc_x_2=tu_data[df_taxis.astype('int64')-1,0].reshape((df_taxis.shape[0],1))
+480 |         work_loc_y_2=tu_data[df_taxis.astype('int64')-1,1].reshape((df_taxis.shape[0],1))
+481 |         distance_ij_homogeneous=np.zeros((df_requesters.shape[0],df_taxis.size))
+482 |         for i in range(df_requesters.shape[0]):
+483 |             for j in range(df_taxis.size):
+484 |                 azimuth, bkw_azimuth, distance = grs80.inv(req_pu_loc_x_2[i], req_pu_loc_y_2[i], work_loc_x_2[j],work_loc_y_2[j])
+485 |                 distance_ij_homogeneous[i,j]=distance.item()*0.001
+486 |         #set of area IDs where at least one requester exists
+487 |         ID_set=list(set(df_requesters[:,1]))
+488 |         #parameters to calculate the acceptance rate
+489 |         S_0_rate=1.5
+490 |         S_a=1/(S_0_rate-1)
+491 |         S_b=1+1/(S_0_rate-1)
+492 |         #the upperbound and lower bound of the price
+493 |         p_max=np.amax(df_requesters[:,4]/df_requesters[:,3])*S_0_rate
+494 |         p_min=np.amin(df_requesters[:,4]/df_requesters[:,3])
+495 | 
+496 |         #start MAPS algorithm
+497 |         start_time1=time.time()
+498 |         p_current=np.ones(len(ID_set))*p_max
+499 |         current_count=np.zeros(len(ID_set))
+500 |         Nr=np.zeros(len(ID_set))
+501 |         Nr_max=np.zeros(len(ID_set))
+502 |         for i in range(len(ID_set)):
+503 |             Nr_max[i]+=sum(df_requesters[:,1]==ID_set[i])
+504 |         dr_sum=np.zeros(len(ID_set))
+505 | 
+506 |         p_new=np.ones(len(ID_set))*p_max
+507 |         new_count=np.zeros(len(ID_set))
+508 |         delta_new=np.zeros(len(ID_set))
+509 | 
+510 |         num_requseters=len(df_requesters[:,0])
+511 |         num_taxis=len(df_taxis)
+512 |         edges = [set() for _ in range(num_requseters)]
+513 |         matched=[-1]*num_taxis
+514 |         matched_r=[-1]*num_requseters
+515 |         D_pre=np.zeros(len(ID_set))
+516 | 
+517 |         #difference between each price
+518 |         d_rate=0.05
+519 |         #number of price values
+520 |         d_number=int(np.trunc(np.log(p_max/p_min)/np.log(1+d_rate)))+1
+521 | 
+522 |         #average number of acceptances for each price
+523 |         S=np.ones([len(ID_set),d_number])*np.inf
+524 |         for r in range(len(ID_set)):
+525 |             p_tmp=p_max
+526 |             for k in range(d_number):
+527 |                 #df_requesters[df_requesters[:,1]==ID_set[r]][:,4]  # 地域rにおけるtotal_amountの列
+528 |                 accept_sum=0
+529 |                 for [o_dist,to_am] in df_requesters[df_requesters[:,1]==ID_set[r]][:,[3,4]]:
+530 |                         #accept_sum+=-S_a/to_am*p_tmp*o_dist+S_b
+531 |                         accept_sum+=1-(1/(1+np.exp((-p_tmp*o_dist+beta*to_am)/(gamma*to_am))))
+532 |                 S[r,k]=accept_sum/len(df_requesters[df_requesters[:,1]==ID_set[r]][:,1])
+533 |                 #print(r,S[r,k],p_tmp*S[r,k])
+534 |                 p_tmp=p_tmp/(1+d_rate)
+535 | 
+536 | 
+537 |         #start first iteration
+538 |         #Calculate delta
+539 |         for r in range(len(ID_set)):
+540 |             dr_sum[r]=np.sum(df_requesters[:,3]*(df_requesters[:,1]==ID_set[r]))
+541 |             dr_Nr_sum=0
+542 |             r_count=0
+543 |             count=0
+544 |             while 1:
+545 |                 if df_requesters[count,1]==ID_set[r]:
+546 |                     dr_Nr_sum+=df_requesters[count,3]
+547 |                     r_count+=1
+548 |                 if r_count==Nr[r]+1:
+549 |                     Nr_plus_flag=1
+550 |                     break
+551 |                 count+=1
+552 |             value_tmp=0.0
+553 |             p_tmp=p_max
+554 |             d_count=0
+555 |             while p_tmp >= p_min:
+556 |                 C=dr_sum[r]
+557 |                 D=dr_Nr_sum
+558 |                 if value_tmp < np.amin([C*(p_tmp-alpha/s_taxi)*S[r,d_count],D*(p_tmp-alpha/s_taxi)]):
+559 |                     value_tmp=np.amin([C*(p_tmp-alpha/s_taxi)*S[r,d_count],D*(p_tmp-alpha/s_taxi)])
+560 |                     p_opt=p_tmp
+561 |                     opt_d_count=d_count
+562 |                 p_tmp=p_tmp/(1+d_rate)
+563 |                 d_count+=1
+564 |             delta_new[r]=(p_opt-alpha/s_taxi)*S[r,opt_d_count]-(p_current[r]-alpha/s_taxi)*S[r,int(current_count[r])]
+565 |             p_new[r]=p_opt
+566 |             new_count[r]=opt_d_count
+567 |             D_pre[r]=D
+568 | 
+569 |         #assume that it is possible to match a taxi with an requester within 2 km
+570 |         for i in range(num_requseters):
+571 |             for j in range(num_taxis):
+572 |                 if distance_ij_homogeneous[i,j]<=2.0:
+573 |                     edges[i].add(j)
+574 | 
+575 |         #Find an augmented path
+576 |         feasible_flag=False
+577 |         max_index=np.argmax(delta_new)
+578 |         for i in range(n):
+579 |             if df_requesters[i,1]==ID_set[max_index] and matched_r[i]==-1:
+580 |                 feasible_flag=dfs(i, set())
+581 |                 if feasible_flag==True:
+582 |                     matched_r[i]=1
+583 |                     break
+584 | 
+585 |         #If there is an augmented path, change the match and calculate new delta
+586 |         if feasible_flag==True:
+587 |             Nr[max_index]+=1
+588 |             p_current[max_index]=p_new[max_index]
+589 |             current_count[max_index]=new_count[max_index]
+590 |             value_tmp=0.0
+591 |             p_tmp=p_max
+592 |             d_count=0
+593 | 
+594 |             #line 18--21 in Algorithm 2 of tong's paper
+595 |             if Nr[max_index]+1<=Nr_max[max_index]:
+596 |                 C=dr_sum[max_index]
+597 |                 D=0
+598 |                 sum_num=0
+599 |                 for i in range(len(df_requesters[:,1])):
+600 |                     if sum_num > Nr[max_index]+1:
+601 |                         break
+602 |                     if df_requesters[i,1]==ID_set[max_index]:
+603 |                         D+=df_requesters[i,3]
+604 |                         sum_num+=1
+605 |                 while p_tmp >= p_min:
+606 |                     if value_tmp < np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)]):
+607 |                         value_tmp=np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)])
+608 |                         p_opt=p_tmp
+609 |                         opt_d_count=d_count
+610 |                     p_tmp=p_tmp/(1+d_rate)
+611 |                     d_count+=1
+612 |                 delta_new[max_index]=(p_opt-alpha/s_taxi)*S[max_index,opt_d_count]-(p_current[max_index]-alpha/s_taxi)*S[max_index,int(current_count[max_index])]
+613 |                 #delta_new[max_index]=value_tmp-np.amin([C*p_current[r]*S[r,int(current_count[r])],D*p_current[r]])
+614 |                 p_new[max_index]=p_opt
+615 |                 new_count[max_index]=opt_d_count
+616 |             #line 16--17 in Algorithm 2 of tong's paper
+617 |             else:
+618 |                 delta_new[max_index]=-1
+619 |                 p_new[max_index]=-1
+620 |                 new_count[max_index]=-1
+621 |         else:
+622 |             delta_new[max_index]=-1
+623 | 
+624 |         #second and subsequent iterations
+625 |         iter_num=0
+626 |         while 1:
+627 |             feasible_flag=False
+628 |             max_index=np.argmax(delta_new)
+629 |             if delta_new[max_index]<=0:
+630 |                 break
+631 |             for i in range(n):
+632 |                 if df_requesters[i,1]==ID_set[max_index] and matched_r[i]==-1:
+633 |                     feasible_flag=dfs(i, set())
+634 |                     if feasible_flag==True:
+635 |                         matched_r[i]=1
+636 |                     break
+637 |             if feasible_flag==True:
+638 |                 Nr[max_index]+=1
+639 |                 p_current[max_index]=p_new[max_index]
+640 |                 current_count[max_index]=new_count[max_index]
+641 |                 if Nr[max_index]+1<=Nr_max[max_index]:
+642 |                     value_tmp=0.0
+643 |                     p_tmp=p_max
+644 |                     d_count=0
+645 |                     C=dr_sum[max_index]
+646 |                     D=0
+647 |                     sum_num=0
+648 |                     for i in range(len(df_requesters[:,1])):
+649 |                         if sum_num > Nr[max_index]+1 or sum_num > Nr_max[max_index]:
+650 |                             break
+651 |                         if df_requesters[i,1]==ID_set[max_index]:
+652 |                             D+=df_requesters[i,3]
+653 |                             sum_num+=1
+654 |                     while p_tmp >= p_min:
+655 |                         if value_tmp < np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)]):
+656 |                             value_tmp=np.amin([C*(p_tmp-alpha/s_taxi)*S[max_index,d_count],D*(p_tmp-alpha/s_taxi)])
+657 |                             p_opt=p_tmp
+658 |                             opt_d_count=d_count
+659 |                         p_tmp=p_tmp/(1+d_rate)
+660 |                         d_count+=1
+661 |                     delta_new[max_index]=(p_opt-alpha/s_taxi)*S[max_index,opt_d_count]-(p_current[max_index]-alpha/s_taxi)*S[max_index,int(current_count[max_index])]
+662 | 
+663 |                     p_new[max_index]=p_opt
+664 |                     new_count[max_index]=opt_d_count
+665 |                     D_pre[max_index]=D
+666 |                 else:
+667 |                     delta_new[max_index]=-1
+668 |                     p_new[max_index]=-1
+669 |                     new_count[max_index]=-1
+670 |             else:
+671 |                 delta_new[max_index]=-1
+672 | 
+673 |             iter_num+=1
+674 | 
+675 |         #set the price
+676 |         price_MAPS=np.zeros(n)
+677 |         for i in range(n):
+678 |             r=df_requesters[i,1]
+679 |             for h in range(len(ID_set)):
+680 |                 if ID_set[h]==r:
+681 |                     price_MAPS[i]=p_current[h]*df_requesters[i,3]
+682 |                     break
+683 |         computation_time_MAPS=time.time()-start_time1
+684 | 
+685 |         #start LinUCB
+686 |         start_time2=time.time()
+687 | 
+688 |         df_ID=df_loc[df_loc["borough"] == place]
+689 |         PUID_set=list(set(df_ID.values[:,4]))
+690 |         DOID_set =list(set(df_ID.values[:,4]))
+691 | 
+692 |         price_LinUCB=np.zeros([n,1])
+693 |         Acceptance_probability_LinUCB=np.zeros([n,1])
+694 | 
+695 |         hour_onehot=np.zeros(10)
+696 |         hour_onehot[hour-10]=1
+697 |         max_arm=np.ones(n)*(-1)
+698 | 
+699 |         #line 4 in Algorithm 1 of chu's paper
+700 |         theta_0=np.linalg.solve(A_0,b_0)
+701 |         theta_1=np.linalg.solve(A_1,b_1)
+702 |         theta_2=np.linalg.solve(A_2,b_2)
+703 |         theta_3=np.linalg.solve(A_3,b_3)
+704 |         theta_4=np.linalg.solve(A_4,b_4)
+705 | 
+706 |         #make features X (line 5 in Algorithm 1 of chu's paper)
+707 |         for i in range(df_requesters.shape[0]):
+708 |             PUID_onehot=np.zeros(len(PUID_set))
+709 |             for j in range(len(PUID_set)):
+710 |                 if df_requesters[i,1]==PUID_set[j]:
+711 |                     PUID_onehot[j]=1
+712 |             DOID_onehot=np.zeros(len(DOID_set))
+713 |             for j in range(len(DOID_set)):
+714 |                 if df_requesters[i,2]==DOID_set[j]:
+715 |                     DOID_onehot[j]=1
+716 |             X=np.hstack([hour_onehot,PUID_onehot,DOID_onehot,df_requesters[i,3],df_requesters[i,5]])
+717 | 
+718 |             #line 7 and 9 in Algorithm 1 of chu's paper
+719 |             p_0=np.inner(theta_0,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_0,X)))
+720 |             max_p=p_0
+721 |             max_arm[i]=0
+722 |             p_1=np.inner(theta_1,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_1,X)))
+723 |             if p_1>max_p:
+724 |                 max_p=p_1
+725 |                 max_arm[i]=1
+726 |             p_2=np.inner(theta_2,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_2,X)))
+727 |             if p_2>max_p:
+728 |                 max_p=p_2
+729 |                 max_arm[i]=2
+730 |             p_3=np.inner(theta_3,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_3,X)))
+731 |             if p_3>max_p:
+732 |                 max_p=p_3
+733 |                 max_arm[i]=3
+734 |             p_4=np.inner(theta_4,X)+UCB_alpha*np.sqrt(np.inner(X,np.linalg.solve(A_4,X)))
+735 |             if p_4>max_p:
+736 |                 max_p=p_4
+737 |                 max_arm[i]=4
+738 |             price_LinUCB[i]=arm_price[int(max_arm[i])]*df_requesters[i,3]
+739 |             Acceptance_probability_LinUCB[i]=1-(1/(1+np.exp((-price_LinUCB[i]+beta*df_requesters[i,4])/(gamma*df_requesters[i,4]))))
+740 | 
+741 |         #line 10 in Algorithm 1 of chu's paper
+742 |         a_LinUCB=np.zeros(n)
+743 |         for i in range(n):
+744 |             tmp=np.random.rand()
+745 |             if tmp < Acceptance_probability_LinUCB[i]:
+746 |                 a_LinUCB[i]=1
+747 |         [opt_value_LinUCB,matched_edges_LinUCB,reward_LinUCB]=value_eval(price_LinUCB,a_LinUCB)
+748 | 
+749 |         #line 11 and 12 in Algorithm 1 of chu's paper
+750 |         for i in range(df_requesters.shape[0]):
+751 |             PUID_onehot=np.zeros(len(PUID_set))
+752 |             for j in range(len(PUID_set)):
+753 |                 if df_requesters[i,1]==PUID_set[j]:
+754 |                     PUID_onehot[j]=1
+755 |             DOID_onehot=np.zeros(len(DOID_set))
+756 |             for j in range(len(DOID_set)):
+757 |                 if df_requesters[i,2]==DOID_set[j]:
+758 |                     DOID_onehot[j]=1
+759 |             X=np.hstack([hour_onehot,PUID_onehot,DOID_onehot,df_requesters[i,3],df_requesters[i,5]])
+760 |             if max_arm[i]==0:
+761 |                 A_0+=np.outer(X, X)
+762 |                 b_0+=X*reward_LinUCB[i]
+763 |             elif max_arm[i]==1:
+764 |                 A_1+=np.outer(X, X)
+765 |                 b_1+=X*reward_LinUCB[i]
+766 |             elif max_arm[i]==2:
+767 |                 A_2+=np.outer(X, X)
+768 |                 b_2+=X*reward_LinUCB[i]
+769 |             elif max_arm[i]==3:
+770 |                 A_3+=np.outer(X, X)
+771 |                 b_3+=X*reward_LinUCB[i]
+772 |             elif max_arm[i]==4:
+773 |                 A_4+=np.outer(X, X)
+774 |                 b_4+=X*reward_LinUCB[i]
+775 |         computation_time_LinUCB=time.time()-start_time2
+776 | 
+777 |         #compute the result for each method
+778 |         objective_value_proposed_list=np.zeros(num_eval)
+779 |         objective_value_MAPS_list=np.zeros(num_eval)
+780 |         objective_value_LinUCB_list=np.zeros(num_eval)
+781 | 
+782 |         Acceptance_probability_proposed=1-(1/(1+np.exp(((-price_proposed+beta*df_requesters[:,4])/(gamma*df_requesters[:,4])).astype(np.float64))))
+783 |         Acceptance_probability_MAPS=1-(1/(1+np.exp(((-price_MAPS+beta*df_requesters[:,4])/(gamma*df_requesters[:,4])).astype(np.float64))))
+784 | 
+785 |         for k in range(num_eval):
+786 |                 a_proposed=np.zeros(n)
+787 |                 a_MAPS=np.zeros(n)
+788 |                 a_LinUCB=np.zeros(n)
+789 |                 for i in range(n):
+790 |                     tmp=np.random.rand()
+791 |                     if tmp < Acceptance_probability_proposed[i]:
+792 |                         a_proposed[i]=1
+793 |                     if tmp < Acceptance_probability_MAPS[i]:
+794 |                         a_MAPS[i]=1
+795 |                     if tmp < Acceptance_probability_LinUCB[i]:
+796 |                         a_LinUCB[i]=1
+797 |                 [opt_value,matched_edges,reward]=value_eval(price_proposed,a_proposed)
+798 |                 objective_value_proposed_list[k]=opt_value
+799 |                 [opt_value_MAPS,d_post_MAPS,reward]=value_eval(price_MAPS,a_MAPS)
+800 |                 objective_value_MAPS_list[k]=opt_value_MAPS
+801 |                 [opt_value_LinUCB,d_post_LinUCB,reward_LinUCB]=value_eval(price_LinUCB,a_LinUCB)
+802 |                 objective_value_LinUCB_list[k]=opt_value_LinUCB.item()
+803 | 
+804 |         average_objective_value_proposed_list.append(np.average(objective_value_proposed_list))
+805 |         average_objective_value_MAPS_list.append(np.average(objective_value_MAPS_list))
+806 |         average_objective_value_LinUCB_list.append(np.average(objective_value_LinUCB_list))
+807 | 
+808 |         computation_time_proposed_vec.append(computation_time_proposed)
+809 |         computation_time_MAPS_vec.append(computation_time_MAPS)
+810 |         computation_time_LinUCB_vec.append(computation_time_LinUCB)
+811 | 
+812 |     else:
+813 |         average_objective_value_proposed_list.append(0)
+814 |         average_objective_value_MAPS_list.append(0)
+815 |         average_objective_value_LinUCB_list.append(0)
+816 | 
+817 |         computation_time_proposed_vec.append(0)
+818 |         computation_time_MAPS_vec.append(0)
+819 |         computation_time_LinUCB_vec.append(0)
+820 | 
+821 |     print(tt_tmp+1, '/', simulataion_range, 'iterations end')
+822 | 
+823 | with open('../results/Average_result_Sigmoid_place=%s_day=%s_interval=%f%s.csv' %(place, day, time_interval ,time_unit), mode='w') as f:
+824 |     writer = csv.writer(f)
+825 |     writer.writerow([np.average(average_objective_value_proposed_list),np.average(computation_time_proposed_vec)])
+826 |     writer.writerow([np.average(average_objective_value_MAPS_list),np.average(computation_time_MAPS_vec)])
+827 |     writer.writerow([np.average(average_objective_value_LinUCB_list),np.average(computation_time_LinUCB_vec)])
+828 | 
+
+
+--------------------------------------------------------------------------------
+
+
+now create a complete brand new taxi-benchmark framework for all exisiting methods and LP whithich new introduced one 
+
+1. we want to push docker (as a layer or something) - USING SCRIPT
+2. use ssh to connecxt EC2 big instance - simple SSH and use SCRIP ON EC2 machine to load resources
+3. use some script to pyll and run docker in tmux session using same CLI 
+4. monitor logs and saved day results to the S3
+
+Remove all not needed files from taxi-benchmark
+
+
+
+
+
+
+
+
+
+
+
+
+aws ecr get-login-password --region eu-north-1 | \
+    docker login --username AWS --password-stdin \
+    AKIASOFP324IR4RAWM36.dkr.ecr.eu-north-1.amazonaws.com
+
+./scripts/run_docker.sh -- \
+    --processing-date 2019-10-06 \
+    --vehicle-type green \
+    --boroughs Manhattan Brooklyn \
+    --methods LP MinMaxCostFlow MAPS LinUCB \
+    --num-iter 100 \
+    --start-hour 10 \
+    --end-hour 12
+
+
+
