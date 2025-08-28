@@ -3433,18 +3433,57 @@ Remove all not needed files from taxi-benchmark
 
 
 
+
+
+
+
+
+
+
+
+
+IE27BOFA99006157226023
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 aws ecr get-login-password --region eu-north-1 | \
     docker login --username AWS --password-stdin \
     AKIASOFP324IR4RAWM36.dkr.ecr.eu-north-1.amazonaws.com
 
-./scripts/run_docker.sh -- \
-    --processing-date 2019-10-06 \
-    --vehicle-type green \
-    --boroughs Manhattan Brooklyn \
-    --methods LP MinMaxCostFlow MAPS LinUCB \
-    --num-iter 100 \
-    --start-hour 10 \
-    --end-hour 12
+E
 
-
+└── experiments/
+    └── run_20191001_green_Man_Bro_LP_MAPS_20231025_143022/
+        ├── results_batch_001.parquet
+        ├── results_batch_002.parquet
+        └── experiment_summary.json
 

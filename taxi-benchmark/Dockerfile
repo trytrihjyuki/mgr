@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for taxi benchmark experiments
-FROM python:3.9-slim as base
+FROM python:3.9-slim AS base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -27,7 +27,7 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Production stage
-FROM base as production
+FROM base AS production
 
 # Add AWS CLI for EC2 operations
 RUN pip install --no-cache-dir awscli
@@ -50,7 +50,7 @@ ENTRYPOINT ["python", "run_experiment.py"]
 CMD ["--help"]
 
 # Development stage
-FROM base as development
+FROM base AS development
 
 # Install development dependencies
 RUN pip install --no-cache-dir \

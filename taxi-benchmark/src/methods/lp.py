@@ -34,12 +34,17 @@ class LPMethod(BasePricingMethod):
         """Get method name."""
         return "LP"
     
-    def compute_prices(self, scenario_data: Dict[str, Any]) -> np.ndarray:
+    def compute_prices(
+        self,
+        scenario_data: Dict[str, Any],
+        acceptance_function: str
+    ) -> np.ndarray:
         """
-        Compute prices using the Gupta-Nagarajan LP formulation.
+        Compute prices using the Gupta-Nagarajan LP formulation optimized for specific acceptance function.
         
         Args:
             scenario_data: Dictionary with scenario data
+            acceptance_function: 'PL' or 'Sigmoid' - which function to optimize for
             
         Returns:
             Array of prices for each requester
@@ -60,7 +65,7 @@ class LPMethod(BasePricingMethod):
         
         # Calculate acceptance probabilities for each price
         acceptance_probs = self._calculate_acceptance_probabilities(
-            price_grids, trip_amounts
+            price_grids, trip_amounts, acceptance_function
         )
         
         # Build and solve the LP
@@ -114,22 +119,26 @@ class LPMethod(BasePricingMethod):
     def _calculate_acceptance_probabilities(
         self,
         price_grids: Dict[int, np.ndarray],
-        trip_amounts: np.ndarray
+        trip_amounts: np.ndarray,
+        acceptance_function: str
     ) -> Dict[Tuple[int, int], float]:
         """
-        Calculate acceptance probability for each (requester, price_index) pair.
+        Calculate acceptance probability for each (requester, price_index) pair using specified acceptance function.
         
         Returns:
             Dictionary mapping (requester_id, price_index) to acceptance probability
         """
         acceptance_probs = {}
-        # Use PL acceptance for LP optimization
-        # The actual acceptance will be computed in the base class for both functions
         
         for i, amount in enumerate(trip_amounts):
             for j, price in enumerate(price_grids[i]):
-                # Piecewise linear
-                prob = max(0, min(1, -2.0 / amount * price + 3.0))
+                if acceptance_function == 'PL':
+                    # Piecewise linear
+                    prob = max(0, min(1, -2.0 / amount * price + 3.0))
+                else:  # Sigmoid
+                    # Sigmoid acceptance - exact match to Hikima implementation
+                    exponent = (-price + self.sigmoid_beta * amount) / (self.sigmoid_gamma * abs(amount))
+                    prob = 1.0 - (1.0 / (1.0 + np.exp(exponent)))
                 
                 acceptance_probs[(i, j)] = prob
         

@@ -60,12 +60,17 @@ class LinUCBMethod(BasePricingMethod):
         """Get method name."""
         return "LinUCB"
     
-    def compute_prices(self, scenario_data: Dict[str, Any]) -> np.ndarray:
+    def compute_prices(
+        self,
+        scenario_data: Dict[str, Any],
+        acceptance_function: str
+    ) -> np.ndarray:
         """
-        Compute prices using the LinUCB algorithm.
+        Compute prices using the LinUCB algorithm optimized for specific acceptance function.
         
         Args:
             scenario_data: Dictionary with scenario data
+            acceptance_function: 'PL' or 'Sigmoid' - which function to optimize for
             
         Returns:
             Array of prices for each requester
@@ -127,7 +132,7 @@ class LinUCBMethod(BasePricingMethod):
             selected_arm = np.argmax(ucb_values)
             selected_arms[i] = selected_arm
             
-            # Compute price
+            # Compute price exactly like Hikima (line 790 in both experiments)
             price_multiplier = self.price_multipliers[selected_arm]
             prices[i] = self.base_price * price_multiplier * trip_distances[i]
         

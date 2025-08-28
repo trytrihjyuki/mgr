@@ -6,11 +6,9 @@ from datetime import date, datetime, timedelta
 from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 import json
-import yaml
 
 from .types import (
-    VehicleType, Borough, PricingMethod, 
-    AcceptanceFunction, TimeWindow
+    VehicleType, Borough, PricingMethod, TimeWindow
 )
 
 
@@ -50,7 +48,7 @@ class ExperimentConfig:
     
     # For Sigmoid
     sigmoid_beta: float = 1.3
-    sigmoid_gamma: float = 0.276  # (0.3*sqrt(3)/pi)
+    sigmoid_gamma: float = field(default_factory=lambda: (0.3 * (3**0.5) / 3.141592653589793))  # Exact match to Hikima's line 49
     
     # LinUCB parameters
     ucb_alpha: float = 0.5
@@ -158,7 +156,6 @@ class ExperimentConfig:
             'vehicle_type': self.vehicle_type.value,
             'boroughs': [b.value for b in self.boroughs],
             'methods': [m.value for m in self.methods],
-            'acceptance_function': self.acceptance_function.value,
             'start_hour': self.start_hour,
             'end_hour': self.end_hour,
             'time_delta': self.time_delta,
@@ -185,10 +182,7 @@ class ExperimentConfig:
         """Save configuration to file."""
         path = Path(path)
         with open(path, 'w') as f:
-            if path.suffix == '.yaml':
-                yaml.dump(self.to_dict(), f, default_flow_style=False)
-            else:
-                json.dump(self.to_dict(), f, indent=2)
+            json.dump(self.to_dict(), f, indent=2)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ExperimentConfig':
@@ -212,10 +206,7 @@ class ExperimentConfig:
         """Load configuration from file."""
         path = Path(path)
         with open(path) as f:
-            if path.suffix == '.yaml':
-                data = yaml.safe_load(f)
-            else:
-                data = json.load(f)
+            data = json.load(f)
         return cls.from_dict(data)
 
 

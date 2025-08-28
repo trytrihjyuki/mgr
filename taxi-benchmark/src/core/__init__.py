@@ -5,7 +5,7 @@ from .types import (
     VehicleType, Borough, PricingMethod, 
     AcceptanceFunction, TimeWindow
 )
-from .logging import setup_logger, get_logger
+from .logging import setup_logger, get_logger, ExperimentLogger
 
 __all__ = [
     'ExperimentConfig',
@@ -16,5 +16,6 @@ __all__ = [
     'AcceptanceFunction',
     'TimeWindow',
     'setup_logger',
-    'get_logger'
+    'get_logger',
+    'ExperimentLogger'
 ] 

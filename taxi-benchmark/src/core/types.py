@@ -15,6 +15,15 @@ class VehicleType(Enum):
     FHV = "fhv"
     FHVHV = "fhvhv"
     
+    @classmethod
+    def from_string(cls, value: str) -> 'VehicleType':
+        """Create VehicleType from string value."""
+        value_lower = value.lower()
+        for vehicle_type in cls:
+            if vehicle_type.value == value_lower:
+                return vehicle_type
+        raise ValueError(f"Invalid vehicle type: {value}")
+    
     def get_pickup_column(self) -> str:
         """Get the pickup datetime column name for this vehicle type."""
         if self == VehicleType.YELLOW:
@@ -100,42 +109,20 @@ class AcceptanceFunction(Enum):
 
 
 @dataclass
+@dataclass
 class TimeWindow:
     """Represents a time window for experiments."""
-    start_hour: int
-    start_minute: int
-    end_hour: int
-    end_minute: int
+    start: datetime
+    end: datetime
     
     def __post_init__(self):
         """Validate time window."""
-        if not (0 <= self.start_hour < 24 and 0 <= self.end_hour < 24):
-            raise ValueError("Hours must be between 0 and 23")
-        if not (0 <= self.start_minute < 60 and 0 <= self.end_minute < 60):
-            raise ValueError("Minutes must be between 0 and 59")
-        
-        start_total = self.start_hour * 60 + self.start_minute
-        end_total = self.end_hour * 60 + self.end_minute
-        if start_total >= end_total:
+        if self.start >= self.end:
             raise ValueError("Start time must be before end time")
-    
-    def to_datetime_range(self, date_obj: date) -> Tuple[datetime, datetime]:
-        """Convert to datetime range for a specific date."""
-        start = datetime.combine(
-            date_obj, 
-            time(self.start_hour, self.start_minute)
-        )
-        end = datetime.combine(
-            date_obj,
-            time(self.end_hour, self.end_minute)
-        )
-        return start, end
     
     def duration_minutes(self) -> int:
         """Get duration in minutes."""
-        start_total = self.start_hour * 60 + self.start_minute
-        end_total = self.end_hour * 60 + self.end_minute
-        return end_total - start_total
+        return int((self.end - self.start).total_seconds() / 60)
 
 
 @dataclass
