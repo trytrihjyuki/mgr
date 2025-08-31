@@ -34,9 +34,6 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 # Verify the module structure is correct
 RUN ls -la /app/src/ && ls -la /app/src/__init__.py
-RUN python -c "import sys; print('Python path:', sys.path)"
-RUN python -c "import src; print('src module imported successfully')"
-RUN python -c "import src.experiments; print('src.experiments imported successfully')"
 
 # Development stage
 FROM base AS development
