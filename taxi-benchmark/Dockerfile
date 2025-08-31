@@ -26,29 +26,6 @@ RUN mkdir -p /app/logs /app/configs /app/output /tmp/taxi_data_cache
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# Production stage
-FROM base AS production
-
-# Add AWS CLI for EC2 operations
-RUN pip install --no-cache-dir awscli
-
-# Default environment variables (can be overridden)
-ENV AWS_DEFAULT_REGION=eu-north-1
-ENV S3_BASE=magisterka
-ENV S3_RESULTS_BUCKET=taxi-benchmark
-
-# Create non-root user
-RUN useradd -m -s /bin/bash experiment && \
-    chown -R experiment:experiment /app /tmp/taxi_data_cache
-
-USER experiment
-
-# Entry point
-ENTRYPOINT ["python", "run_experiment.py"]
-
-# Default command (show help)
-CMD ["--help"]
-
 # Development stage
 FROM base AS development
 

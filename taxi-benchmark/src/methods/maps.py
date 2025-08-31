@@ -108,12 +108,12 @@ class MAPSMethod(BasePricingMethod):
         
         # Safety checks to prevent infinite loops
         if p_max <= p_min or p_max <= 0 or p_min <= 0:
-            self.logger.warning(f"[MAPS] Invalid price bounds: p_max={p_max}, p_min={p_min}. Using fallback pricing.")
+            self.logger.warning(f"Invalid price bounds: p_max={p_max}, p_min={p_min}. Using fallback pricing.")
             # Fallback: simple uniform pricing
             return trip_amounts * 1.2
         
         if np.any(trip_distances <= 0) or np.any(trip_amounts <= 0):
-            self.logger.warning(f"[MAPS] Invalid trip data found. Using fallback pricing.")
+            self.logger.warning(f"Invalid trip data found. Using fallback pricing.")
             return trip_amounts * 1.2
         
         # Initialize MAPS data structures (Hikima's lines 551-570)
@@ -144,7 +144,7 @@ class MAPSMethod(BasePricingMethod):
         
         # Safety check for price discretization
         if d_number <= 0 or d_number > 1000:
-            self.logger.warning(f"[MAPS] Invalid price discretization: d_number={d_number}. Using simplified approach.")
+            self.logger.warning(f"Invalid price discretization: d_number={d_number}. Using simplified approach.")
             d_number = min(max(1, d_number), 50)  # Clamp to reasonable range
         
         # Calculate acceptance rates for each price (Hikima's lines 577-590)

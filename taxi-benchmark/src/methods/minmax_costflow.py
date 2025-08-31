@@ -49,14 +49,14 @@ class MinMaxCostFlowMethod(BasePricingMethod):
         edge_weights = scenario_data['edge_weights']
         trip_amounts = scenario_data['trip_amounts']
         
-        self.logger.info(f"[MinMaxCostFlow] {acceptance_function}: N={n_requesters}, M={n_taxis}")
+        self.logger.info(f"{acceptance_function}: N={n_requesters}, M={n_taxis}")
         
         # Handle edge cases
         if n_requesters == 0:
-            self.logger.debug(f"[MinMaxCostFlow] {acceptance_function}: No requesters, returning empty array")
+            self.logger.debug(f"{acceptance_function}: No requesters, returning empty array")
             return np.array([])
         if n_taxis == 0:
-            self.logger.debug(f"[MinMaxCostFlow] {acceptance_function}: No taxis, returning zeros")
+            self.logger.debug(f"{acceptance_function}: No taxis, returning zeros")
             return np.zeros(n_requesters)
         
         # Use the appropriate algorithm based on acceptance function
