@@ -12,12 +12,26 @@ import signal
 from datetime import date
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add both parent and src to path for robust module resolution
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(current_dir / "src"))
 
-from src.core import ExperimentConfig, setup_logger, get_logger
-from src.core.types import VehicleType, Borough, PricingMethod
-from src.experiments import ExperimentRunner
+# Debug path information
+print(f"DEBUG: Current working directory: {Path.cwd()}")
+print(f"DEBUG: Script directory: {current_dir}")
+print(f"DEBUG: Python path: {sys.path[:3]}")  # Show first 3 entries
+print(f"DEBUG: src/__init__.py exists: {(current_dir / 'src' / '__init__.py').exists()}")
+
+try:
+    from src.core import ExperimentConfig, setup_logger, get_logger
+    from src.core.types import VehicleType, Borough, PricingMethod
+    from src.experiments import ExperimentRunner
+    print("DEBUG: All imports successful")
+except ImportError as e:
+    print(f"IMPORT ERROR: {e}")
+    print(f"DEBUG: Available files in src/: {list((current_dir / 'src').glob('*')) if (current_dir / 'src').exists() else 'src directory not found'}")
+    raise
 
 
 def signal_handler(signum, frame):

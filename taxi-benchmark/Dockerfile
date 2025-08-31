@@ -19,12 +19,24 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ /app/src/
 COPY run_experiment.py .
 
+# Ensure correct permissions and ownership
+RUN chmod -R 755 /app/src/ && \
+    chmod +x /app/run_experiment.py && \
+    chown -R root:root /app/
+
 # Create necessary directories
 RUN mkdir -p /app/logs /app/configs /app/output /tmp/taxi_data_cache
 
-# Set environment variables
-ENV PYTHONPATH=/app
+# Set environment variables for robust Python module resolution
+ENV PYTHONPATH=/app:/app/src
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Verify the module structure is correct
+RUN ls -la /app/src/ && ls -la /app/src/__init__.py
+RUN python -c "import sys; print('Python path:', sys.path)"
+RUN python -c "import src; print('src module imported successfully')"
+RUN python -c "import src.experiments; print('src.experiments imported successfully')"
 
 # Development stage
 FROM base AS development
