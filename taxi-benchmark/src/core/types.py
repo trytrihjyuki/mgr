@@ -109,7 +109,6 @@ class AcceptanceFunction(Enum):
 
 
 @dataclass
-@dataclass
 class TimeWindow:
     """Represents a time window for experiments."""
     start: datetime

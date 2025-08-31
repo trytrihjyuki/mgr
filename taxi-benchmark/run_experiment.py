@@ -8,6 +8,7 @@ Usage:
 
 import sys
 import argparse
+import signal
 from datetime import date
 from pathlib import Path
 
@@ -17,6 +18,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.core import ExperimentConfig, setup_logger, get_logger
 from src.core.types import VehicleType, Borough, PricingMethod
 from src.experiments import ExperimentRunner
+
+
+def signal_handler(signum, frame):
+    """Handle termination signals and log them."""
+    logger = get_logger()
+    logger.error(f"Received signal {signum} ({signal.Signals(signum).name}), terminating...")
+    logger.error(f"Frame info: {frame}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(1)
 
 
 def parse_arguments():
@@ -81,8 +92,15 @@ def parse_arguments():
     parser.add_argument(
         '--time-delta',
         type=int,
+        default=5,
+        help='Interval between time window starts in minutes (Hikima uses 5)'
+    )
+    
+    parser.add_argument(
+        '--time-window-size',
+        type=int,
         default=30,
-        help='Time window size in minutes'
+        help='Time window duration in seconds (Hikima default: 30s)'
     )
     
     parser.add_argument(
@@ -95,7 +113,7 @@ def parse_arguments():
     parser.add_argument(
         '--log-level',
         type=str,
-        default='INFO',
+        default='DEBUG',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         help='Logging level'
     )
@@ -109,6 +127,19 @@ def main():
     
     # Setup logging
     logger = setup_logger(level=args.log_level)
+    
+    # Register signal handlers to catch termination
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, 'SIGKILL'):
+        try:
+            signal.signal(signal.SIGKILL, signal_handler)
+        except OSError:
+            pass  # SIGKILL cannot be caught
+    if hasattr(signal, 'SIGQUIT'):
+        signal.signal(signal.SIGQUIT, signal_handler)
+    
+    logger.debug("Signal handlers registered")
     
     logger.info("=" * 80)
     logger.info("TAXI PRICING BENCHMARK")
@@ -153,6 +184,7 @@ def main():
             start_hour=args.start_hour,
             end_hour=args.end_hour,
             time_delta=args.time_delta,
+            time_window_size=args.time_window_size,
             num_iter=args.num_iter,
             num_workers=args.num_workers
         )
@@ -164,7 +196,8 @@ def main():
         logger.info(f"  Boroughs: {[b.value for b in config.boroughs]}")
         logger.info(f"  Methods: {[m.value for m in config.methods]}")
         logger.info(f"  Time: {config.start_hour:02d}:00 - {config.end_hour:02d}:00")
-        logger.info(f"  Time Delta: {config.time_delta} minutes")
+        logger.info(f"  Window Interval: {config.time_delta} minutes (Hikima: 5min)")
+        logger.info(f"  Window Duration: {config.time_window_size} seconds (Hikima: 30s)")
         logger.info(f"  Iterations: {config.num_iter}")
         logger.info(f"  Workers: {config.num_workers}")
         logger.info("")

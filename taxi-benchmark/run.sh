@@ -31,12 +31,15 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ $# -eq 0 ]; then
     echo "  --num-iter N             Number of iterations (default: 100)"
     echo "  --start-hour H           Start hour 0-23 (default: 10)"
     echo "  --end-hour H             End hour 0-23 (default: 11)"
-    echo "  --time-delta M           Time window in minutes (default: 30)"
+    echo "  --time-delta M           Interval between window starts in minutes (default: 5, Hikima: 5)"
+    echo "  --time-window-size S     Window duration in seconds (default: 30, Hikima: 30)"
     echo "  --num-workers N          Parallel workers (default: 1)"
     echo ""
     echo "Examples:"
     echo "  $0 --processing-date 2019-10-06"
     echo "  $0 --processing-date 2019-10-06 --boroughs Manhattan Brooklyn --methods LP MinMaxCostFlow MAPS LinUCB"
+    echo "  $0 --processing-date 2019-10-06 --time-window-size 300  # 5-minute windows like you want"
+    echo "  $0 --processing-date 2019-10-06 --time-window-size 30   # 30-second windows like Hikima"
     echo ""
     exit 0
 fi

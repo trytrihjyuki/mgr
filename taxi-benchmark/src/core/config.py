@@ -25,8 +25,9 @@ class ExperimentConfig:
     # Time window configuration
     start_hour: int = 0
     end_hour: int = 23
-    time_delta: int = 5  # minutes
-    time_unit: str = 'm'  # 'm' for minutes, 'h' for hours
+    time_delta: int = 5  # minutes - interval between window starts (Hikima uses 5)
+    time_unit: str = 'm'  # 'm' for minutes, 'h' for hours, 's' for seconds
+    time_window_size: int = 30  # seconds - actual window duration (Hikima default: 30s)
     
     # Monte Carlo parameters
     num_iter: int = 100  # Number of Monte Carlo iterations per time window
@@ -160,6 +161,7 @@ class ExperimentConfig:
             'end_hour': self.end_hour,
             'time_delta': self.time_delta,
             'time_unit': self.time_unit,
+            'time_window_size': self.time_window_size,
             'num_iter': self.num_iter,
             'num_workers': self.num_workers,
             's3_base': self.s3_base,
@@ -194,7 +196,7 @@ class ExperimentConfig:
         data['vehicle_type'] = VehicleType(data['vehicle_type'])
         data['boroughs'] = [Borough(b) for b in data['boroughs']]
         data['methods'] = [PricingMethod(m) for m in data['methods']]
-        data['acceptance_function'] = AcceptanceFunction(data['acceptance_function'])
+        # Note: AcceptanceFunction handling can be added if needed in the future
         
         # Remove fields that aren't part of the dataclass
         data.pop('experiment_id', None)
