@@ -49,7 +49,7 @@ docker-compose.override.yml
 # Logs
 *.log
 logs/
-experiment.log
+# experiment.log
 
 # Output
 output/
